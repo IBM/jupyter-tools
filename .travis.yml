@@ -1,0 +1,18 @@
+language: python
+
+cache: pip
+
+install: pip install tox
+
+script: tox
+
+jobs:
+  include:
+  - stage: test
+    env: TOXENV=flake8
+  - stage: test
+    env: TOXENV=hub-stress-test
+
+notifications:
+  email:
+    on_success: never
