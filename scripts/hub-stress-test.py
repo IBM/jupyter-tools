@@ -5,7 +5,7 @@ from concurrent import futures
 from datetime import datetime
 import functools
 import logging
-import mock
+from unittest import mock
 import os
 import sys
 import time
