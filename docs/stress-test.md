@@ -52,13 +52,13 @@ The number of `user` nodes needed for a scale test will depend on the resource r
 of the user notebook pods, reserved space on the nodes, other system pods running on the nodes,
 e.g. logging daemon, pod limits per node, etc.
 
-If there are not enough nodes available and the auto-scaler has to create them on the fly
+If there are not enough nodes available and the auto-scaler has to create them
 as the stress test is running, we can hit the [consecutive failure limit](https://github.com/jupyterhub/zero-to-jupyterhub-k8s/blob/363d0b7db5/jupyterhub/values.yaml#L17) which will cause the hub container to crash and restart.
 One way to avoid this is run the script with a `--count` that is not higher than 500 which
 gives time between runs for the auto-scaler to add more `user` nodes.
 
-As an example, on IBM Cloud there is a hard [pod limit](https://cloud.ibm.com/docs/containers?topic=containers-limitations)
-of 110 per node and there are about 25 system pods per node. Our testing cluster user notebooks are using a micro
+As an example, the `kubelet` default `maxPods` limit is 110 per node and on IBM Cloud there are about
+25 system pods per node. Our testing cluster user notebooks are using a micro
 profile so their resource usage is not an issue, they are just limited to the 110 pod-per-node limit.
 As a reference, to scale up to 3000 users/pods we need to have at least 35 user nodes.
 
