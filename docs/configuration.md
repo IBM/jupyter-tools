@@ -102,7 +102,7 @@ Other settings which are helpful for tuning performance.
 This value controls the number of threads `kubespawner` will create to make API calls to
 Kubernetes. The default is `5 * num_cpus`. Given a large enough number of users logging in
 and spawning servers at the same time this may not be enough threads. A more sensible value
-for this setting is `c.Jupyterhub.concurrent_spawn_limit`. `concurrent_spawn_limit` controls
+for this setting is [c.Jupyterhub.concurrent_spawn_limit](https://jupyterhub.readthedocs.io/en/stable/api/app.html#jupyterhub.app.JupyterHub.concurrent_spawn_limit). `concurrent_spawn_limit` controls
 how many users can spawn servers at the same time. By creating that many threadpool workers
 we ensure that there's always a thread available to service a user's spawn request.
 
