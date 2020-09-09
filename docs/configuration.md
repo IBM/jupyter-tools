@@ -20,7 +20,7 @@ on the hub. Setting this to `1` helps to reduce load on the hub.
 The timeout controls how long a server can be idle before being deleted. Because the servers
 will aggressively cull themselves this value can be set very high.
 
-These can be all configured in the `cull` section of `values.yaml`:
+These can be all configured in the `cull` section of [values.yaml](https://github.com/jupyterhub/zero-to-jupyterhub-k8s/blob/master/jupyterhub/values.yaml):
 ```yaml
 cull:
   timeout: 432000 # 5 days
