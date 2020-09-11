@@ -54,14 +54,8 @@ cull:
 There are two settings which control how the notebooks cull themselves. The first is
 `c.NotebookApp.shutdown_no_activity_timeout` which specifies the period of inactivity
 (in seconds) before a server is shutdown. The second is `c.MappingKernelManager.cull_idle_timeout`
-which determines when kernels will be shutdown.
-
-```yaml
-extraConfig:
-  myConfig: |
-    c.NotebookApp.shutdown_no_activity_timeout = 3600
-    c.MappingKernelManager.cull_idle_timeout = 3600
-```
+which determines when kernels will be shutdown. These settings can be configured as described
+[here](https://jupyter-notebook.readthedocs.io/en/stable/config_overview.html).
 
 <a name="activity"></a>
 ## Activity intervals
