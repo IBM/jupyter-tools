@@ -68,7 +68,7 @@ extraConfig:
 These settings control how spawner and user activity is tracked. These settings have
 a large impact on the performance of the hub.
 
-<a name"activity-resolution"></a>
+<a name="activity-resolution"></a>
 ### `c.JupyterHub.activity_resolution`
 Activity resolution controls how often activity updates are written to the database. Many
 API calls will record activity for a user. This setting determines whether or not that update
