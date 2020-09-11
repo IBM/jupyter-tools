@@ -25,7 +25,7 @@ There are two mechanisms for controlling the culling of servers and users. One i
 process managed by the hub which will periodically cull users and servers. The other
 is a setting which will allow servers to delete themselves after a period of inactivity.
 
-<a name="frequency"></a>
+<a name="culler-frequency"></a>
 ### Frequency
 By default the culler runs every 10 minutes. With a more aggressive setting for the notebook
 idle timeout the hub-managed culler can be run less frequently.
