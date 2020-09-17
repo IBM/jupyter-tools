@@ -205,12 +205,11 @@ Linux `top` command.
 	  0.00%   0.00%   0.000s    0.010s   _run_once (asyncio/base_events.py:1451)
 	  0.00%   0.00%   0.000s    0.010s   _run (asyncio/events.py:145)
     ```
-
+    The output can be sorted by each column as well.
 <a name="py-spy-record"></a>
 1. `py-spy record`  
 The record command runs in the foreground collecting samples and when it's closed (either
 by CTRL+C or when it reaches its configured duration) an SVG flamegraph is written to disk.
-
     ```
     jovyan@hub-69f94ddc84-g26qj:/$ py-spy record -o /tmp/py-spy-trace -p 1
     py-spy> Sampling process 100 times a second. Press Control-C to exit.
@@ -219,9 +218,8 @@ by CTRL+C or when it reaches its configured duration) an SVG flamegraph is writt
     py-spy> Stopped sampling because Control-C pressed
     py-spy> Wrote flamegraph data to '/tmp/py-spy-trace'. Samples: 20541 Errors: 0
     ```
-That will produce an SVG like this:
-![Example](./images/py-spy-example.svg)
-
+    That will produce an SVG like this:
+    ![Example](./images/py-spy-example.svg)
 <a name="py-spy-dump"></a>
 1. `py-spy dump`  
 The dump command will dump the state of all threads for the specified process. It can
