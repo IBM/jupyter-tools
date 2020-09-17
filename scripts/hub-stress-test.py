@@ -546,10 +546,11 @@ def purge_users(token, endpoint, dry_run=False):
 
 
 @timeit
-def notebook_activity_test(count, token, endpoint, workers, keep=False):
+def notebook_activity_test(count, token, endpoint, workers, keep=False,
+                           dry_run=False):
     if count < workers:
         workers = count
-    session = get_session(token=token, pool_maxsize=workers)
+    session = get_session(token=token, dry_run=dry_run, pool_maxsize=workers)
 
     # First figure out how many existing hub-stress-test users there are since
     # that will determine our starting index for names.
@@ -581,7 +582,7 @@ def notebook_activity_test(count, token, endpoint, workers, keep=False):
             url = "{}/users/{}/activity".format(endpoint, username)
             resp = session.post(
                 url, data=json.dumps(body), timeout=DEFAULT_TIMEOUT)
-            total_time = resp.elapsed.total_seconds()
+            total_time = 1 if dry_run else resp.elapsed.total_seconds()
             times.append(total_time)
             LOG.debug("Sent activity for user %s (%f)", username, total_time)
 
@@ -598,7 +599,7 @@ def notebook_activity_test(count, token, endpoint, workers, keep=False):
         ping_times = []
         while not STOP_PING:
             resp = session.get("{}/users/{}".format(endpoint, usernames[0]))
-            total = resp.elapsed.total_seconds()
+            total = 1 if dry_run else resp.elapsed.total_seconds()
             ping_times.append(total)
             LOG.debug("[ping-hub] Fetching user model took %f seconds", total)
 
@@ -657,7 +658,8 @@ def main():
                             keep=args.keep)
         elif args.command == 'activity-stress-test':
             notebook_activity_test(args.count, args.token,
-                                   args.endpoint, args.workers, keep=args.keep)
+                                   args.endpoint, args.workers, keep=args.keep,
+                                   dry_run=args.dry_run)
     except Exception as e:
         LOG.exception(e)
         sys.exit(128)
