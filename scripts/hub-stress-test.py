@@ -2,11 +2,13 @@
 
 import argparse
 from concurrent import futures
-from datetime import datetime
+from datetime import datetime, timedelta
 import functools
+import json
 import logging
 from unittest import mock
 import os
+import random
 import sys
 import time
 
@@ -39,12 +41,20 @@ def parse_args():
         description='''
 JupyterHub Stress Test
 
-This will create `--count` number of fake users and notebook servers in batches
-defined by the `--batch-size` option in the given JupyterHub `--endpoint`.
-It will wait for each notebook server to be considered "ready" by the hub.
-By default the created users and servers will be deleted but the `--keep`
-option can be used to retain the resources for steady-state profiling. The
-`--purge` option is available to delete any previously kept users/servers.
+The `stress-test` command will create `--count` number of fake users and
+notebook servers in batches defined by the `--batch-size` option in the
+given JupyterHub `--endpoint`. It will wait for each notebook server to
+be considered "ready" by the hub. By default the created users and servers
+will be deleted but the `--keep` option can be used to retain the resources
+for steady-state profiling. The `purge` command is available to delete any
+previously kept users/servers.
+
+The `activity-stress-test` command simulates user activity updates. This
+will create `--count` fake users with no server. These users will be
+deleted unless `--keep` is specified. A number of threads specified by
+`--workers` will be created to send updates to the hub. While these worker
+threads are sending activity another thread makes requests to the API and
+reports on the average, minimum, and maximum time of that API call.
 
 An admin API token is required and may be specified using the
 JUPYTERHUB_API_TOKEN environment variable.
@@ -56,20 +66,9 @@ A `--dry-run` option is available for seeing what the test would look like
 without actually making any changes, for example:
 
   JUPYTERHUB_API_TOKEN=test
-  python hub-stress-test.py -v -e http://localhost:8000/hub/api --dry-run
+  JUPYTERHUB_ENDPOINT=http://localhost:8000/hub/api
+  python hub-stress-test.py stress-test -v --dry-run
 ''')
-    parser.add_argument('-v', '--verbose', action='store_true',
-                        help='Enable verbose (debug) logging which includes '
-                             'logging API response times.')
-    parser.add_argument('-b', '--batch-size', default=10, type=int,
-                        help='Batch size to use when creating users and '
-                             'notebook servers. Note that by default z2jh '
-                             'will limit concurrent server creation to 64 '
-                             '(see c.JupyterHub.concurrent_spawn_limit) '
-                             '(default: 10).')
-    parser.add_argument('-c', '--count', default=100, type=int,
-                        help='Number of users/servers (pods) to create '
-                             '(default: 100).')
     parser.add_argument('-e', '--endpoint',
                         default=os.environ.get('JUPYTERHUB_ENDPOINT'),
                         help='The target hub API endpoint for the stress '
@@ -96,25 +95,57 @@ without actually making any changes, for example:
                              'timestamp-based log file under /tmp will be '
                              'created. Note that if a FILEPATH value is given '
                              'an existing file will be overwritten.')
-    keep_purge_group = parser.add_mutually_exclusive_group()
-    keep_purge_group.add_argument(
+    parser.add_argument('-v', '--verbose', action='store_true',
+                        help='Enable verbose (debug) logging which includes '
+                             'logging API response times.')
+
+    # This parser holds arguments that need to be shared among two or more
+    # subcommands but should not be top-level arguments.
+    parent_parser = argparse.ArgumentParser(add_help=False)
+    parent_parser.add_argument(
         '-k', '--keep', action='store_true',
         help='Retain the created fake users/servers once they all created. '
              'By default the script will scale up and then teardown. The '
              'script can be run with --keep multiple times to build on an '
-             'existing set of fake users.')
-    keep_purge_group.add_argument(
-        '-p', '--purge', action='store_true',
-        help='Purge all fake stress test users from the environment.')
+             'existing set of fake users.'
+    )
+    parent_parser.add_argument('-c', '--count', default=100, type=int,
+                               help='Number of users/servers (pods) to create '
+                                    '(default: 100).')
+
+    subparsers = parser.add_subparsers(dest='command', required=True)
+    stress_parser = subparsers.add_parser(
+        'stress-test', parents=[parent_parser]
+    )
+    stress_parser.add_argument(
+        '-b', '--batch-size', default=10, type=int,
+        help='Batch size to use when creating users and notebook servers. '
+             'Note that by default z2jh will limit concurrent server creation '
+             'to 64 (see c.JupyterHub.concurrent_spawn_limit) (default: 10). '
+    )
+
+    activity_parser = subparsers.add_parser(
+        'activity-stress-test', parents=[parent_parser]
+    )
+    activity_parser.add_argument(
+        '--workers', type=int, default=100,
+        help='Number of worker threads to create. Each thread will receive '
+             'len(users) // workers users to send updates for.'
+    )
+
+    # Add a standalone purge subcommand
+    subparsers.add_parser('purge')
+
     args = parser.parse_args()
     return args
 
 
 def validate(args):
-    if args.batch_size < 1:
-        raise Exception('--batch-size must be greater than 0')
-    if args.count < 1:
-        raise Exception('--count must be greater than 0')
+    if args.command == 'stress-test':
+        if args.batch_size < 1:
+            raise Exception('--batch-size must be greater than 0')
+        if args.count < 1:
+            raise Exception('--count must be greater than 0')
     if args.token is None:
         raise Exception('An API token must be provided either using --token '
                         'or the JUPYTERHUB_API_TOKEN environment variable')
@@ -183,7 +214,7 @@ def log_response_time(resp, *args, **kwargs):
                'elapsed': resp.elapsed.total_seconds()})
 
 
-def get_session(token, dry_run=False):
+def get_session(token, dry_run=False, pool_maxsize=100):
     if dry_run:
         return mock.create_autospec(requests.Session)
     session = requests.Session()
@@ -197,8 +228,9 @@ def get_session(token, dry_run=False):
             503,  # if the hub container crashes we get a 503
             504,  # if the cloudflare gateway times out we get a 504
         })
-    session.mount("http://", adapters.HTTPAdapter(max_retries=r))
-    session.mount("https://", adapters.HTTPAdapter(max_retries=r))
+    adapter = adapters.HTTPAdapter(max_retries=r, pool_maxsize=pool_maxsize)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
     if LOG.isEnabledFor(logging.DEBUG):
         session.hooks['response'].append(log_response_time)
     return session
@@ -513,6 +545,100 @@ def purge_users(token, endpoint, dry_run=False):
             raise Exception('Failed to delete all users')
 
 
+@timeit
+def notebook_activity_test(count, token, endpoint, workers, keep=False,
+                           dry_run=False):
+    if count < workers:
+        workers = count
+    session = get_session(token=token, dry_run=dry_run, pool_maxsize=workers)
+
+    # First figure out how many existing hub-stress-test users there are since
+    # that will determine our starting index for names.
+    existing_users = find_existing_stress_test_users(endpoint, session)
+
+    usernames = [user['name'] for user in existing_users]
+
+    # Create the missing users.
+    to_create = count - len(existing_users)
+    if to_create > 0:
+        users = create_users(to_create, to_create, endpoint, session,
+                             existing_users=existing_users)
+        usernames.extend([name for usernames in users for name in usernames])
+
+    def send_activity(users, endpoint, session):
+        now = datetime.utcnow() + timedelta(minutes=1)
+        now = now.isoformat()
+        body = {
+            "servers": {
+                "": {
+                    "last_activity": now,
+                }
+            },
+            "last_activity": now,
+        }
+        times = []
+        for username in users:
+            time.sleep(random.random())
+            url = "{}/users/{}/activity".format(endpoint, username)
+            resp = session.post(
+                url, data=json.dumps(body), timeout=DEFAULT_TIMEOUT)
+            total_time = 1 if dry_run else resp.elapsed.total_seconds()
+            times.append(total_time)
+            LOG.debug("Sent activity for user %s (%f)", username, total_time)
+
+        return times
+
+    def chunk(users, n):
+        for i in range(0, len(users), n):
+            yield users[i:i + n]
+
+    # STOP_PING is used to control the ping_hub function.
+    STOP_PING = False
+
+    def ping_hub(endpoint, session):
+        ping_times = []
+        while not STOP_PING:
+            resp = session.get("{}/users/{}".format(endpoint, usernames[0]))
+            total = 1 if dry_run else resp.elapsed.total_seconds()
+            ping_times.append(total)
+            LOG.debug("[ping-hub] Fetching user model took %f seconds", total)
+
+        avg = sum(ping_times) / len(ping_times)
+        LOG.info("Hub ping time: average=%f, min=%f, max=%f",
+                 avg, min(ping_times), max(ping_times))
+
+    LOG.info("Simulating activity updates for %d users", count)
+    times = []
+    with futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        # Launch our 'ping' thread. This will repeatedly hit the API during
+        # the test and track the timing. We don't need to get the future
+        # because this thread is controlled via the STOP_PING varaible.
+        executor.submit(ping_hub, endpoint, session)
+
+        # Give each worker thread an even share of the test users. Each thread
+        # will iterate over its list of users and POST an activity update. The
+        # thread will sleep a random amount of time between 0 and 1 seconds
+        # between users.
+        future_to_timing = {
+            executor.submit(send_activity, users, endpoint, session): users
+            for users in chunk(usernames, len(usernames) // workers)
+        }
+        for future in futures.as_completed(future_to_timing):
+            times.extend(future.result())
+
+        # We only want the ping_hub thread to run while the users are POSTing
+        # activity updates. Once all futures are completed we can shut down
+        # the ping thread.
+        STOP_PING = True
+
+    avg = sum(times) / len(times)
+    LOG.info("Time to POST activity update: average=%f, min=%f, max=%f",
+             avg, min(times), max(times))
+
+    if not keep:
+        delete_users(usernames, endpoint, session)
+
+
 def main():
     args = parse_args()
     setup_logging(verbose=args.verbose, log_to_file=args.log_to_file,
@@ -524,12 +650,16 @@ def main():
         sys.exit(1)
 
     try:
-        if args.purge:
+        if args.command == 'purge':
             purge_users(args.token, args.endpoint, dry_run=args.dry_run)
-        else:
+        elif args.command == 'stress-test':
             run_stress_test(args.count, args.batch_size, args.token,
                             args.endpoint, dry_run=args.dry_run,
                             keep=args.keep)
+        elif args.command == 'activity-stress-test':
+            notebook_activity_test(args.count, args.token,
+                                   args.endpoint, args.workers, keep=args.keep,
+                                   dry_run=args.dry_run)
     except Exception as e:
         LOG.exception(e)
         sys.exit(128)
