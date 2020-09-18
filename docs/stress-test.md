@@ -7,6 +7,7 @@ and how it can be used.
 1. [Scaling up](#scaling-up)
    1. [Placeholders and user nodes](#placeholders)
    1. [Steady state testing](#steady-state)
+   1. [Activity update testing](#activity-update-testing)
 1. [Scaling down](#scaling-down)
 1. [Monitoring](#monitoring)
 
@@ -86,6 +87,7 @@ Note that the `c.NotebookApp.shutdown_no_activity_timeout` value in the user not
 testing cluster) should either be left at the default (0) or set to some larger window so that while
 you are scaling up the notebook pods do not shut themselves down.
 
+<a name="activity-update-testing"></a>
 ### Activity update testing
 
 The `activity-stress-test` command can be used to simulate `--count` users POSTing activity
@@ -93,6 +95,7 @@ updates. This command only creates users, not servers. It takes a number of user
 specified by `--count` and a number of worker threads, `--workers`, to perform the actual
 requests. If `--keep` isn't specified then the users will be deleted after the test.
 
+<a name="scaling-down"></a>
 ## Scaling down
 
 If you used the `--keep` option to scale up and retain pods for steady state testing, when you are
