@@ -145,7 +145,7 @@ platform is deployment-specific but the following are some examples of dashboard
 <a name="profiling"></a>
 ## Profiling
 
-During the stress test `py-spy` can be used to capture profiling data. It will generate SVGs
+During stress testing, or even normal operations, [py-spy](https://github.com/benfred/py-spy) can be used to capture profiling data. It will generate SVGs
 that show where the hub is spending its time.
 
 <a name="py-spy-installation"></a>
