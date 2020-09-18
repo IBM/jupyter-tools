@@ -23,8 +23,9 @@ export JUPYTERHUB_ENDPOINT=https://myhub-testing.acme.com/hub/api
 
 ## Scaling up
 
-By default the `hub-stress-test` script will scale up to 100 users and notebook servers (pods)
-in batches, wait for them to be "ready" and then stop and delete them.
+By default the `stress-test` command of the `hub-stress-test` script will scale up to
+100 users and notebook servers (pods) in batches, wait for them to be "ready" and then
+stop and delete them.
 
 ### Placeholders and user nodes
 
@@ -74,10 +75,17 @@ Note that the `c.NotebookApp.shutdown_no_activity_timeout` value in the user not
 testing cluster) should either be left at the default (0) or set to some larger window so that while
 you are scaling up the notebook pods do not shut themselves down.
 
+### Activity update testing
+
+The `activity-stress-test` command can be used to simulate `--count` users POSTing activity
+updates. This command only creates users, not servers. It takes a number of users to simulate
+specified by `--count` and a number of worker threads, `--workers`, to perform the actual
+requests. If `--keep` isn't specified then the users will be deleted after the test.
+
 ## Scaling down
 
 If you used the `--keep` option to scale up and retain pods for steady state testing, when you are
-done you can scale down the pods and users by using the `--purge` option. The users created by the
+done you can scale down the pods and users by using the `purge` command. The users created by the
 script all have a specific naming convention so it knows which notebook servers to stop and users
 to remove.
 
