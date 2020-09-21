@@ -3,6 +3,15 @@
 This document gives an overview of the [hub-stress-test script](../scripts/hub-stress-test.py)
 and how it can be used.
 
+1. [Setup](#setup)
+1. [Scaling up](#scaling-up)
+   1. [Placeholders and user nodes](#placeholders)
+   1. [Steady state testing](#steady-state)
+   1. [Activity update testing](#activity-update-testing)
+1. [Scaling down](#scaling-down)
+1. [Monitoring](#monitoring)
+
+<a name="setup"></a>
 ## Setup
 
 You will need two things to run the script, an admin token and a target hub API endpoint URL.
@@ -21,12 +30,14 @@ export JUPYTERHUB_API_TOKEN=abcdef123456
 export JUPYTERHUB_ENDPOINT=https://myhub-testing.acme.com/hub/api
 ```
 
+<a name="scaling-up"></a>
 ## Scaling up
 
 By default the `stress-test` command of the `hub-stress-test` script will scale up to
 100 users and notebook servers (pods) in batches, wait for them to be "ready" and then
 stop and delete them.
 
+<a name="placeholders"></a>
 ### Placeholders and user nodes
 
 The number of pods that can be created in any given run depends on the number of
@@ -63,6 +74,7 @@ As an example, the `kubelet` default `maxPods` limit is 110 per node and on IBM 
 profile so their resource usage is not an issue, they are just limited to the 110 pod-per-node limit.
 As a reference, to scale up to 3000 users/pods we need to have at least 35 user nodes.
 
+<a name="steady-state"></a>
 ### Steady state testing
 
 The `--keep` option can be used to scale up the number of pods in the cluser and retain them
@@ -75,6 +87,7 @@ Note that the `c.NotebookApp.shutdown_no_activity_timeout` value in the user not
 testing cluster) should either be left at the default (0) or set to some larger window so that while
 you are scaling up the notebook pods do not shut themselves down.
 
+<a name="activity-update-testing"></a>
 ### Activity update testing
 
 The `activity-stress-test` command can be used to simulate `--count` users POSTing activity
@@ -82,6 +95,7 @@ updates. This command only creates users, not servers. It takes a number of user
 specified by `--count` and a number of worker threads, `--workers`, to perform the actual
 requests. If `--keep` isn't specified then the users will be deleted after the test.
 
+<a name="scaling-down"></a>
 ## Scaling down
 
 If you used the `--keep` option to scale up and retain pods for steady state testing, when you are
@@ -89,6 +103,7 @@ done you can scale down the pods and users by using the `purge` command. The use
 script all have a specific naming convention so it knows which notebook servers to stop and users
 to remove.
 
+<a name="monitoring"></a>
 ## Monitoring
 
 Depending on the number of pods being created or deleted the script can take awhile. During a run

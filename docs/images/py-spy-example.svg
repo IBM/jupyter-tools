@@ -1,0 +1,419 @@
+<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg version="1.1" width="1200" height="630" onload="init(evt)" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><!--Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples.--><!--NOTES: --><defs><linearGradient id="background" y1="0" y2="1" x1="0" x2="0"><stop stop-color="#eeeeee" offset="5%"/><stop stop-color="#eeeeb0" offset="95%"/></linearGradient></defs><style type="text/css">
+text { font-family:"Verdana"; font-size:12px; fill:rgb(0,0,0); }
+#title { text-anchor:middle; font-size:17px; }
+#search { opacity:0.1; cursor:pointer; }
+#search:hover, #search.show { opacity:1; }
+#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+#unzoom { cursor:pointer; }
+#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+.hide { display:none; }
+.parent { opacity:0.5; }
+</style><script type="text/ecmascript"><![CDATA[var nametype = 'Function:';
+var fontsize = 12;
+var fontwidth = 0.59;
+var xpad = 10;
+var inverted = true;
+var searchcolor = 'rgb(230,0,230)';
+var fluiddrawing = true;
+var truncate_text_right = false;]]><![CDATA["use strict";
+var details, searchbtn, unzoombtn, matchedtxt, svg, searching, frames;
+function init(evt) {
+    details = document.getElementById("details").firstChild;
+    searchbtn = document.getElementById("search");
+    unzoombtn = document.getElementById("unzoom");
+    matchedtxt = document.getElementById("matched");
+    svg = document.getElementsByTagName("svg")[0];
+    frames = document.getElementById("frames");
+    searching = 0;
+
+    // Use GET parameters to restore a flamegraph's state.
+    var restore_state = function() {
+        var params = get_params();
+        if (params.x && params.y)
+            zoom(find_group(document.querySelector('[x="' + params.x + '"][y="' + params.y + '"]')));
+        if (params.s)
+            search(params.s);
+    };
+
+    if (fluiddrawing) {
+        // Make width dynamic so the SVG fits its parent's width.
+        svg.removeAttribute("width");
+        // Edge requires us to have a viewBox that gets updated with size changes.
+        var isEdge = /Edge\/\d./i.test(navigator.userAgent);
+        if (!isEdge) {
+          svg.removeAttribute("viewBox");
+        }
+        var update_for_width_change = function() {
+            if (isEdge) {
+                svg.attributes.viewBox.value = "0 0 " + svg.width.baseVal.value + " " + svg.height.baseVal.value;
+            }
+
+            // Keep consistent padding on left and right of frames container.
+            frames.attributes.width.value = svg.width.baseVal.value - xpad * 2;
+
+            // Text truncation needs to be adjusted for the current width.
+            var el = frames.children;
+            for(var i = 0; i < el.length; i++) {
+                update_text(el[i]);
+            }
+
+            // Keep search elements at a fixed distance from right edge.
+            var svgWidth = svg.width.baseVal.value;
+            searchbtn.attributes.x.value = svgWidth - xpad - 100;
+            matchedtxt.attributes.x.value = svgWidth - xpad - 100;
+        };
+        window.addEventListener('resize', function() {
+            update_for_width_change();
+        });
+        // This needs to be done asynchronously for Safari to work.
+        setTimeout(function() {
+            unzoom();
+            update_for_width_change();
+            restore_state();
+        }, 0);
+    } else {
+        restore_state();
+    }
+}
+// event listeners
+window.addEventListener("click", function(e) {
+    var target = find_group(e.target);
+    if (target) {
+        if (target.nodeName == "a") {
+            if (e.ctrlKey === false) return;
+            e.preventDefault();
+        }
+        if (target.classList.contains("parent")) unzoom();
+        zoom(target);
+
+        // set parameters for zoom state
+        var el = target.querySelector("rect");
+        if (el && el.attributes && el.attributes.y && el.attributes._orig_x) {
+            var params = get_params()
+            params.x = el.attributes._orig_x.value;
+            params.y = el.attributes.y.value;
+            history.replaceState(null, null, parse_params(params));
+        }
+    }
+    else if (e.target.id == "unzoom") {
+        unzoom();
+
+        // remove zoom state
+        var params = get_params();
+        if (params.x) delete params.x;
+        if (params.y) delete params.y;
+        history.replaceState(null, null, parse_params(params));
+    }
+    else if (e.target.id == "search") search_prompt();
+}, false)
+// mouse-over for info
+// show
+window.addEventListener("mouseover", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = nametype + " " + g_to_text(target);
+}, false)
+// clear
+window.addEventListener("mouseout", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = ' ';
+}, false)
+// ctrl-F for search
+window.addEventListener("keydown",function (e) {
+    if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+        e.preventDefault();
+        search_prompt();
+    }
+}, false)
+// functions
+function get_params() {
+    var params = {};
+    var paramsarr = window.location.search.substr(1).split('&');
+    for (var i = 0; i < paramsarr.length; ++i) {
+        var tmp = paramsarr[i].split("=");
+        if (!tmp[0] || !tmp[1]) continue;
+        params[tmp[0]]  = decodeURIComponent(tmp[1]);
+    }
+    return params;
+}
+function parse_params(params) {
+    var uri = "?";
+    for (var key in params) {
+        uri += key + '=' + encodeURIComponent(params[key]) + '&';
+    }
+    if (uri.slice(-1) == "&")
+        uri = uri.substring(0, uri.length - 1);
+    if (uri == '?')
+        uri = window.location.href.split('?')[0];
+    return uri;
+}
+function find_child(node, selector) {
+    var children = node.querySelectorAll(selector);
+    if (children.length) return children[0];
+    return;
+}
+function find_group(node) {
+    var parent = node.parentElement;
+    if (!parent) return;
+    if (parent.id == "frames") return node;
+    return find_group(parent);
+}
+function orig_save(e, attr, val) {
+    if (e.attributes["_orig_" + attr] != undefined) return;
+    if (e.attributes[attr] == undefined) return;
+    if (val == undefined) val = e.attributes[attr].value;
+    e.setAttribute("_orig_" + attr, val);
+}
+function orig_load(e, attr) {
+    if (e.attributes["_orig_"+attr] == undefined) return;
+    e.attributes[attr].value = e.attributes["_orig_" + attr].value;
+    e.removeAttribute("_orig_" + attr);
+}
+function g_to_text(e) {
+    var text = find_child(e, "title").firstChild.nodeValue;
+    return (text)
+}
+function g_to_func(e) {
+    var func = g_to_text(e);
+    // if there's any manipulation we want to do to the function
+    // name before it's searched, do it here before returning.
+    return (func);
+}
+function update_text(e) {
+    var r = find_child(e, "rect");
+    var t = find_child(e, "text");
+    var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+    var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+    t.attributes.x.value = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+    // Smaller than this size won't fit anything
+    if (w < 2 * fontsize * fontwidth) {
+        t.textContent = "";
+        return;
+    }
+    t.textContent = txt;
+    // Fit in full text width
+    if (/^ *\$/.test(txt) || t.getComputedTextLength() < w)
+        return;
+    if (truncate_text_right) {
+        // Truncate the right side of the text.
+        for (var x = txt.length - 2; x > 0; x--) {
+            if (t.getSubStringLength(0, x + 2) <= w) {
+                t.textContent = txt.substring(0, x) + "..";
+                return;
+            }
+        }
+    } else {
+        // Truncate the left side of the text.
+        for (var x = 2; x < txt.length; x++) {
+            if (t.getSubStringLength(x - 2, txt.length) <= w) {
+                t.textContent = ".." + txt.substring(x, txt.length);
+                return;
+            }
+        }
+    }
+    t.textContent = "";
+}
+// zoom
+function zoom_reset(e) {
+    if (e.attributes != undefined) {
+        orig_load(e, "x");
+        orig_load(e, "width");
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_reset(c[i]);
+    }
+}
+function zoom_child(e, x, ratio) {
+    if (e.attributes != undefined) {
+        if (e.attributes.x != undefined) {
+            orig_save(e, "x");
+            e.attributes.x.value = format_percent((parseFloat(e.attributes.x.value) - x) * ratio);
+            if (e.tagName == "text") {
+                e.attributes.x.value = format_percent(parseFloat(find_child(e.parentNode, "rect[x]").attributes.x.value) + (100 * 3 / frames.attributes.width.value));
+            }
+        }
+        if (e.attributes.width != undefined) {
+            orig_save(e, "width");
+            e.attributes.width.value = format_percent(parseFloat(e.attributes.width.value) * ratio);
+        }
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_child(c[i], x, ratio);
+    }
+}
+function zoom_parent(e) {
+    if (e.attributes) {
+        if (e.attributes.x != undefined) {
+            orig_save(e, "x");
+            e.attributes.x.value = "0.0%";
+        }
+        if (e.attributes.width != undefined) {
+            orig_save(e, "width");
+            e.attributes.width.value = "100.0%";
+        }
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_parent(c[i]);
+    }
+}
+function zoom(node) {
+    var attr = find_child(node, "rect").attributes;
+    var width = parseFloat(attr.width.value);
+    var xmin = parseFloat(attr.x.value);
+    var xmax = xmin + width;
+    var ymin = parseFloat(attr.y.value);
+    var ratio = 100 / width;
+    // XXX: Workaround for JavaScript float issues (fix me)
+    var fudge = 0.001;
+    unzoombtn.classList.remove("hide");
+    var el = frames.children;
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        var a = find_child(e, "rect").attributes;
+        var ex = parseFloat(a.x.value);
+        var ew = parseFloat(a.width.value);
+        // Is it an ancestor
+        if (!inverted) {
+            var upstack = parseFloat(a.y.value) > ymin;
+        } else {
+            var upstack = parseFloat(a.y.value) < ymin;
+        }
+        if (upstack) {
+            // Direct ancestor
+            if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+                e.classList.add("parent");
+                zoom_parent(e);
+                update_text(e);
+            }
+            // not in current path
+            else
+                e.classList.add("hide");
+        }
+        // Children maybe
+        else {
+            // no common path
+            if (ex < xmin || ex + fudge >= xmax) {
+                e.classList.add("hide");
+            }
+            else {
+                zoom_child(e, xmin, ratio);
+                update_text(e);
+            }
+        }
+    }
+}
+function unzoom() {
+    unzoombtn.classList.add("hide");
+    var el = frames.children;
+    for(var i = 0; i < el.length; i++) {
+        el[i].classList.remove("parent");
+        el[i].classList.remove("hide");
+        zoom_reset(el[i]);
+        update_text(el[i]);
+    }
+}
+// search
+function reset_search() {
+    var el = document.querySelectorAll("#frames rect");
+    for (var i = 0; i < el.length; i++) {
+        orig_load(el[i], "fill")
+    }
+    var params = get_params();
+    delete params.s;
+    history.replaceState(null, null, parse_params(params));
+}
+function search_prompt() {
+    if (!searching) {
+        var term = prompt("Enter a search term (regexp " +
+            "allowed, eg: ^ext4_)", "");
+        if (term != null) {
+            search(term)
+        }
+    } else {
+        reset_search();
+        searching = 0;
+        searchbtn.classList.remove("show");
+        searchbtn.firstChild.nodeValue = "Search"
+        matchedtxt.classList.add("hide");
+        matchedtxt.firstChild.nodeValue = ""
+    }
+}
+function search(term) {
+    var re = new RegExp(term);
+    var el = frames.children;
+    var matches = new Object();
+    var maxwidth = 0;
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        var func = g_to_func(e);
+        var rect = find_child(e, "rect");
+        if (func == null || rect == null)
+            continue;
+        // Save max width. Only works as we have a root frame
+        var w = parseFloat(rect.attributes.width.value);
+        if (w > maxwidth)
+            maxwidth = w;
+        if (func.match(re)) {
+            // highlight
+            var x = parseFloat(rect.attributes.x.value);
+            orig_save(rect, "fill");
+            rect.attributes.fill.value = searchcolor;
+            // remember matches
+            if (matches[x] == undefined) {
+                matches[x] = w;
+            } else {
+                if (w > matches[x]) {
+                    // overwrite with parent
+                    matches[x] = w;
+                }
+            }
+            searching = 1;
+        }
+    }
+    if (!searching)
+        return;
+    var params = get_params();
+    params.s = term;
+    history.replaceState(null, null, parse_params(params));
+
+    searchbtn.classList.add("show");
+    searchbtn.firstChild.nodeValue = "Reset Search";
+    // calculate percent matched, excluding vertical overlap
+    var count = 0;
+    var lastx = -1;
+    var lastw = 0;
+    var keys = Array();
+    for (k in matches) {
+        if (matches.hasOwnProperty(k))
+            keys.push(k);
+    }
+    // sort the matched frames by their x location
+    // ascending, then width descending
+    keys.sort(function(a, b){
+        return a - b;
+    });
+    // Step through frames saving only the biggest bottom-up frames
+    // thanks to the sort order. This relies on the tree property
+    // where children are always smaller than their parents.
+    var fudge = 0.0001;    // JavaScript floating point
+    for (var k in keys) {
+        var x = parseFloat(keys[k]);
+        var w = matches[keys[k]];
+        if (x >= lastx + lastw - fudge) {
+            count += w;
+            lastx = x;
+            lastw = w;
+        }
+    }
+    // display matched percent
+    matchedtxt.classList.remove("hide");
+    var pct = 100 * count / maxwidth;
+    if (pct != 100) pct = pct.toFixed(1);
+    matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+}
+function format_percent(n) {
+    return n.toFixed(4) + "%";
+}
+]]></script><rect x="0" y="0" width="100%" height="630" fill="url(#background)"/><text id="title" x="50.0000%" y="24.00">py-spy</text><text id="details" x="10" y="613.00"> </text><text id="unzoom" class="hide" x="10" y="24.00">Reset Zoom</text><text id="search" x="1090" y="24.00">Search</text><text id="matched" x="1090" y="613.00"> </text><svg id="frames" x="10" width="1180"><g><title>_execute_context (sqlalchemy/engine/base.py:1278) (782 samples, 1.17%)</title><rect x="2.4504%" y="324" width="1.1684%" height="15" fill="rgb(227,0,7)"/><text x="2.7004%" y="334.50"></text></g><g><title>do_execute (sqlalchemy/engine/default.py:593) (782 samples, 1.17%)</title><rect x="2.4504%" y="340" width="1.1684%" height="15" fill="rgb(217,0,24)"/><text x="2.7004%" y="350.50"></text></g><g><title>__iter__ (sqlalchemy/orm/query.py:3503) (1,612 samples, 2.41%)</title><rect x="1.2177%" y="244" width="2.4086%" height="15" fill="rgb(221,193,54)"/><text x="1.4677%" y="254.50">__..</text></g><g><title>_execute_and_instances (sqlalchemy/orm/query.py:3528) (1,166 samples, 1.74%)</title><rect x="1.8841%" y="260" width="1.7422%" height="15" fill="rgb(248,212,6)"/><text x="2.1341%" y="270.50"></text></g><g><title>execute (sqlalchemy/engine/base.py:1014) (1,163 samples, 1.74%)</title><rect x="1.8886%" y="276" width="1.7377%" height="15" fill="rgb(208,68,35)"/><text x="2.1386%" y="286.50"></text></g><g><title>_execute_on_connection (sqlalchemy/sql/elements.py:298) (1,163 samples, 1.74%)</title><rect x="1.8886%" y="292" width="1.7377%" height="15" fill="rgb(232,128,0)"/><text x="2.1386%" y="302.50"></text></g><g><title>_execute_clauseelement (sqlalchemy/engine/base.py:1133) (846 samples, 1.26%)</title><rect x="2.3623%" y="308" width="1.2641%" height="15" fill="rgb(207,160,47)"/><text x="2.6123%" y="318.50"></text></g><g><title>find (jupyterhub/orm.py:464) (1,808 samples, 2.70%)</title><rect x="0.9443%" y="228" width="2.7015%" height="15" fill="rgb(228,23,34)"/><text x="1.1943%" y="238.50">fi..</text></g><g><title>get_current_user_token (jupyterhub/handlers/base.py:360) (2,195 samples, 3.28%)</title><rect x="0.3765%" y="212" width="3.2797%" height="15" fill="rgb(218,30,26)"/><text x="0.6265%" y="222.50">get..</text></g><g><title>get_current_user_token (jupyterhub/handlers/base.py:374) (679 samples, 1.01%)</title><rect x="3.7832%" y="212" width="1.0145%" height="15" fill="rgb(220,122,19)"/><text x="4.0332%" y="222.50"></text></g><g><title>commit (sqlalchemy/orm/session.py:1042) (678 samples, 1.01%)</title><rect x="3.7847%" y="228" width="1.0130%" height="15" fill="rgb(250,228,42)"/><text x="4.0347%" y="238.50"></text></g><g><title>get_current_user (jupyterhub/handlers/base.py:422) (2,978 samples, 4.45%)</title><rect x="0.3601%" y="196" width="4.4496%" height="15" fill="rgb(240,193,28)"/><text x="0.6101%" y="206.50">get_c..</text></g><g><title>prepare (jupyterhub/handlers/base.py:85) (3,019 samples, 4.51%)</title><rect x="0.3511%" y="180" width="4.5109%" height="15" fill="rgb(216,20,37)"/><text x="0.6011%" y="190.50">prepa..</text></g><g><title>_execute (tornado/web.py:1682) (3,050 samples, 4.56%)</title><rect x="0.3511%" y="164" width="4.5572%" height="15" fill="rgb(206,188,39)"/><text x="0.6011%" y="174.50">_exec..</text></g><g><title>_execute_context (sqlalchemy/engine/base.py:1278) (733 samples, 1.10%)</title><rect x="6.8776%" y="340" width="1.0952%" height="15" fill="rgb(217,207,13)"/><text x="7.1276%" y="350.50"></text></g><g><title>do_execute (sqlalchemy/engine/default.py:593) (733 samples, 1.10%)</title><rect x="6.8776%" y="356" width="1.0952%" height="15" fill="rgb(231,73,38)"/><text x="7.1276%" y="366.50"></text></g><g><title>__iter__ (sqlalchemy/orm/query.py:3503) (1,511 samples, 2.26%)</title><rect x="5.7182%" y="260" width="2.2577%" height="15" fill="rgb(225,20,46)"/><text x="5.9682%" y="270.50">_..</text></g><g><title>_execute_and_instances (sqlalchemy/orm/query.py:3528) (989 samples, 1.48%)</title><rect x="6.4981%" y="276" width="1.4777%" height="15" fill="rgb(210,31,41)"/><text x="6.7481%" y="286.50"></text></g><g><title>execute (sqlalchemy/engine/base.py:1014) (987 samples, 1.47%)</title><rect x="6.5011%" y="292" width="1.4747%" height="15" fill="rgb(221,200,47)"/><text x="6.7511%" y="302.50"></text></g><g><title>_execute_on_connection (sqlalchemy/sql/elements.py:298) (985 samples, 1.47%)</title><rect x="6.5041%" y="308" width="1.4718%" height="15" fill="rgb(226,26,5)"/><text x="6.7541%" y="318.50"></text></g><g><title>_execute_clauseelement (sqlalchemy/engine/base.py:1133) (782 samples, 1.17%)</title><rect x="6.8074%" y="324" width="1.1684%" height="15" fill="rgb(249,33,26)"/><text x="7.0574%" y="334.50"></text></g><g><title>first (sqlalchemy/orm/query.py:3397) (1,721 samples, 2.57%)</title><rect x="5.4134%" y="228" width="2.5715%" height="15" fill="rgb(235,183,28)"/><text x="5.6634%" y="238.50">fi..</text></g><g><title>__getitem__ (sqlalchemy/orm/query.py:3171) (1,711 samples, 2.56%)</title><rect x="5.4283%" y="244" width="2.5565%" height="15" fill="rgb(221,5,38)"/><text x="5.6783%" y="254.50">__..</text></g><g><title>m (jupyterhub/apihandlers/users.py:117) (1,829 samples, 2.73%)</title><rect x="5.2923%" y="180" width="2.7328%" height="15" fill="rgb(247,18,42)"/><text x="5.5423%" y="190.50">m ..</text></g><g><title>find_user (jupyterhub/handlers/base.py:449) (1,829 samples, 2.73%)</title><rect x="5.2923%" y="196" width="2.7328%" height="15" fill="rgb(241,131,45)"/><text x="5.5423%" y="206.50">fi..</text></g><g><title>find (jupyterhub/orm.py:222) (1,829 samples, 2.73%)</title><rect x="5.2923%" y="212" width="2.7328%" height="15" fill="rgb(249,31,29)"/><text x="5.5423%" y="222.50">fi..</text></g><g><title>commit (sqlalchemy/orm/session.py:504) (688 samples, 1.03%)</title><rect x="8.9964%" y="228" width="1.0280%" height="15" fill="rgb(225,111,53)"/><text x="9.2464%" y="238.50"></text></g><g><title>_prepare_impl (sqlalchemy/orm/session.py:483) (685 samples, 1.02%)</title><rect x="9.0009%" y="244" width="1.0235%" height="15" fill="rgb(238,160,17)"/><text x="9.2509%" y="254.50"></text></g><g><title>flush (sqlalchemy/orm/session.py:2523) (684 samples, 1.02%)</title><rect x="9.0023%" y="260" width="1.0220%" height="15" fill="rgb(214,148,48)"/><text x="9.2523%" y="270.50"></text></g><g><title>commit (sqlalchemy/orm/session.py:1042) (874 samples, 1.31%)</title><rect x="8.9919%" y="212" width="1.3059%" height="15" fill="rgb(232,36,49)"/><text x="9.2419%" y="222.50"></text></g><g><title>_execute (tornado/web.py:1701) (3,605 samples, 5.39%)</title><rect x="4.9128%" y="164" width="5.3865%" height="15" fill="rgb(209,103,24)"/><text x="5.1628%" y="174.50">_execut..</text></g><g><title>m (jupyterhub/apihandlers/users.py:119) (1,522 samples, 2.27%)</title><rect x="8.0252%" y="180" width="2.2741%" height="15" fill="rgb(229,88,8)"/><text x="8.2752%" y="190.50">m..</text></g><g><title>post (jupyterhub/apihandlers/users.py:744) (876 samples, 1.31%)</title><rect x="8.9904%" y="196" width="1.3089%" height="15" fill="rgb(213,181,19)"/><text x="9.2404%" y="206.50"></text></g><g><title>_new_spawner (jupyterhub/user.py:286) (692 samples, 1.03%)</title><rect x="11.6933%" y="212" width="1.0340%" height="15" fill="rgb(254,191,54)"/><text x="11.9433%" y="222.50"></text></g><g><title>__getitem__ (jupyterhub/user.py:140) (737 samples, 1.10%)</title><rect x="11.6336%" y="196" width="1.1012%" height="15" fill="rgb(241,83,37)"/><text x="11.8836%" y="206.50"></text></g><g><title>post (jupyterhub/apihandlers/users.py:393) (738 samples, 1.10%)</title><rect x="11.6336%" y="180" width="1.1027%" height="15" fill="rgb(233,36,39)"/><text x="11.8836%" y="190.50"></text></g><g><title>spawn_single_user (jupyterhub/handlers/base.py:769) (972 samples, 1.45%)</title><rect x="12.7661%" y="196" width="1.4523%" height="15" fill="rgb(226,3,54)"/><text x="13.0161%" y="206.50"></text></g><g><title>post (jupyterhub/apihandlers/users.py:414) (1,103 samples, 1.65%)</title><rect x="12.7437%" y="180" width="1.6481%" height="15" fill="rgb(245,192,40)"/><text x="12.9937%" y="190.50"></text></g><g><title>__getitem__ (jupyterhub/user.py:77) (732 samples, 1.09%)</title><rect x="15.8770%" y="228" width="1.0937%" height="15" fill="rgb(238,167,29)"/><text x="16.1270%" y="238.50"></text></g><g><title>post (jupyterhub/apihandlers/users.py:87) (1,480 samples, 2.21%)</title><rect x="14.7624%" y="180" width="2.2114%" height="15" fill="rgb(232,182,51)"/><text x="15.0124%" y="190.50">p..</text></g><g><title>user_from_username (jupyterhub/handlers/base.py:460) (734 samples, 1.10%)</title><rect x="15.8770%" y="196" width="1.0967%" height="15" fill="rgb(231,60,39)"/><text x="16.1270%" y="206.50"></text></g><g><title>_user_from_orm (jupyterhub/handlers/base.py:412) (734 samples, 1.10%)</title><rect x="15.8770%" y="212" width="1.0967%" height="15" fill="rgb(208,69,12)"/><text x="16.1270%" y="222.50"></text></g><g><title>_execute (tornado/web.py:1703) (4,471 samples, 6.68%)</title><rect x="10.2993%" y="164" width="6.6804%" height="15" fill="rgb(235,93,37)"/><text x="10.5493%" y="174.50">_execute ..</text></g><g><title>_server_request_loop (tornado/http1connection.py:817) (704 samples, 1.05%)</title><rect x="19.2254%" y="164" width="1.0519%" height="15" fill="rgb(213,116,39)"/><text x="19.4754%" y="174.50"></text></g><g><title>execute (sqlalchemy/orm/unitofwork.py:589) (830 samples, 1.24%)</title><rect x="20.6837%" y="324" width="1.2402%" height="15" fill="rgb(222,207,29)"/><text x="20.9337%" y="334.50"></text></g><g><title>_flush (sqlalchemy/orm/session.py:2624) (967 samples, 1.44%)</title><rect x="20.4820%" y="292" width="1.4449%" height="15" fill="rgb(206,96,30)"/><text x="20.7320%" y="302.50"></text></g><g><title>execute (sqlalchemy/orm/unitofwork.py:422) (843 samples, 1.26%)</title><rect x="20.6673%" y="308" width="1.2596%" height="15" fill="rgb(218,138,4)"/><text x="20.9173%" y="318.50"></text></g><g><title>commit (sqlalchemy/orm/session.py:504) (998 samples, 1.49%)</title><rect x="20.4372%" y="244" width="1.4912%" height="15" fill="rgb(250,191,14)"/><text x="20.6872%" y="254.50"></text></g><g><title>_prepare_impl (sqlalchemy/orm/session.py:483) (997 samples, 1.49%)</title><rect x="20.4387%" y="260" width="1.4897%" height="15" fill="rgb(239,60,40)"/><text x="20.6887%" y="270.50"></text></g><g><title>flush (sqlalchemy/orm/session.py:2523) (997 samples, 1.49%)</title><rect x="20.4387%" y="276" width="1.4897%" height="15" fill="rgb(206,27,48)"/><text x="20.6887%" y="286.50"></text></g><g><title>spawn (jupyterhub/user.py:488) (1,228 samples, 1.83%)</title><rect x="20.3864%" y="180" width="1.8348%" height="15" fill="rgb(225,35,8)"/><text x="20.6364%" y="190.50">s..</text></g><g><title>new_api_token (jupyterhub/orm.py:215) (1,228 samples, 1.83%)</title><rect x="20.3864%" y="196" width="1.8348%" height="15" fill="rgb(250,213,24)"/><text x="20.6364%" y="206.50">n..</text></g><g><title>new (jupyterhub/orm.py:502) (1,196 samples, 1.79%)</title><rect x="20.4342%" y="212" width="1.7870%" height="15" fill="rgb(247,123,22)"/><text x="20.6842%" y="222.50">n..</text></g><g><title>commit (sqlalchemy/orm/session.py:1042) (1,196 samples, 1.79%)</title><rect x="20.4342%" y="228" width="1.7870%" height="15" fill="rgb(231,138,38)"/><text x="20.6842%" y="238.50">c..</text></g><g><title>first (sqlalchemy/orm/query.py:3397) (692 samples, 1.03%)</title><rect x="24.1203%" y="212" width="1.0340%" height="15" fill="rgb(231,145,46)"/><text x="24.3703%" y="222.50"></text></g><g><title>__getitem__ (sqlalchemy/orm/query.py:3171) (690 samples, 1.03%)</title><rect x="24.1233%" y="228" width="1.0310%" height="15" fill="rgb(251,118,11)"/><text x="24.3733%" y="238.50"></text></g><g><title>spawn (jupyterhub/user.py:518) (696 samples, 1.04%)</title><rect x="24.1173%" y="180" width="1.0399%" height="15" fill="rgb(217,147,25)"/><text x="24.3673%" y="190.50"></text></g><g><title>fetch_by_client_id (jupyterhub/oauth/provider.py:584) (696 samples, 1.04%)</title><rect x="24.1173%" y="196" width="1.0399%" height="15" fill="rgb(247,81,37)"/><text x="24.3673%" y="206.50"></text></g><g><title>spawn (jupyterhub/user.py:526) (1,932 samples, 2.89%)</title><rect x="25.1573%" y="180" width="2.8867%" height="15" fill="rgb(209,12,38)"/><text x="25.4073%" y="190.50">sp..</text></g><g><title>add_client (jupyterhub/oauth/provider.py:580) (716 samples, 1.07%)</title><rect x="26.9742%" y="196" width="1.0698%" height="15" fill="rgb(227,1,9)"/><text x="27.2242%" y="206.50"></text></g><g><title>commit (sqlalchemy/orm/session.py:1042) (716 samples, 1.07%)</title><rect x="26.9742%" y="212" width="1.0698%" height="15" fill="rgb(248,47,43)"/><text x="27.2242%" y="222.50"></text></g><g><title>_flush (sqlalchemy/orm/session.py:2624) (1,091 samples, 1.63%)</title><rect x="28.1755%" y="260" width="1.6301%" height="15" fill="rgb(221,10,30)"/><text x="28.4255%" y="270.50"></text></g><g><title>execute (sqlalchemy/orm/unitofwork.py:422) (993 samples, 1.48%)</title><rect x="28.3219%" y="276" width="1.4837%" height="15" fill="rgb(210,229,1)"/><text x="28.5719%" y="286.50"></text></g><g><title>execute (sqlalchemy/orm/unitofwork.py:589) (991 samples, 1.48%)</title><rect x="28.3249%" y="292" width="1.4807%" height="15" fill="rgb(222,148,37)"/><text x="28.5749%" y="302.50"></text></g><g><title>_prepare_impl (sqlalchemy/orm/session.py:483) (1,150 samples, 1.72%)</title><rect x="28.0918%" y="228" width="1.7183%" height="15" fill="rgb(234,67,33)"/><text x="28.3418%" y="238.50"></text></g><g><title>flush (sqlalchemy/orm/session.py:2523) (1,149 samples, 1.72%)</title><rect x="28.0933%" y="244" width="1.7168%" height="15" fill="rgb(247,98,35)"/><text x="28.3433%" y="254.50"></text></g><g><title>commit (sqlalchemy/orm/session.py:504) (1,152 samples, 1.72%)</title><rect x="28.0903%" y="212" width="1.7213%" height="15" fill="rgb(247,138,52)"/><text x="28.3403%" y="222.50"></text></g><g><title>spawn (jupyterhub/user.py:548) (1,372 samples, 2.05%)</title><rect x="28.0903%" y="180" width="2.0500%" height="15" fill="rgb(213,79,30)"/><text x="28.3403%" y="190.50">s..</text></g><g><title>commit (sqlalchemy/orm/session.py:1042) (1,372 samples, 2.05%)</title><rect x="28.0903%" y="196" width="2.0500%" height="15" fill="rgb(246,177,23)"/><text x="28.3403%" y="206.50">c..</text></g><g><title>spawn (jupyterhub/user.py:585) (873 samples, 1.30%)</title><rect x="31.2027%" y="180" width="1.3044%" height="15" fill="rgb(230,62,27)"/><text x="31.4527%" y="190.50"></text></g><g><title>commit (sqlalchemy/orm/session.py:1042) (873 samples, 1.30%)</title><rect x="31.2027%" y="196" width="1.3044%" height="15" fill="rgb(216,154,8)"/><text x="31.4527%" y="206.50"></text></g><g><title>_flush (sqlalchemy/orm/session.py:2624) (967 samples, 1.44%)</title><rect x="32.5564%" y="260" width="1.4449%" height="15" fill="rgb(244,35,45)"/><text x="32.8064%" y="270.50"></text></g><g><title>execute (sqlalchemy/orm/unitofwork.py:422) (895 samples, 1.34%)</title><rect x="32.6639%" y="276" width="1.3373%" height="15" fill="rgb(251,115,12)"/><text x="32.9139%" y="286.50"></text></g><g><title>execute (sqlalchemy/orm/unitofwork.py:589) (894 samples, 1.34%)</title><rect x="32.6654%" y="292" width="1.3358%" height="15" fill="rgb(240,54,50)"/><text x="32.9154%" y="302.50"></text></g><g><title>commit (sqlalchemy/orm/session.py:504) (985 samples, 1.47%)</title><rect x="32.5354%" y="212" width="1.4718%" height="15" fill="rgb(233,84,52)"/><text x="32.7854%" y="222.50"></text></g><g><title>_prepare_impl (sqlalchemy/orm/session.py:483) (984 samples, 1.47%)</title><rect x="32.5369%" y="228" width="1.4703%" height="15" fill="rgb(207,117,47)"/><text x="32.7869%" y="238.50"></text></g><g><title>flush (sqlalchemy/orm/session.py:2523) (984 samples, 1.47%)</title><rect x="32.5369%" y="244" width="1.4703%" height="15" fill="rgb(249,43,39)"/><text x="32.7869%" y="254.50"></text></g><g><title>spawn (jupyterhub/user.py:671) (1,181 samples, 1.76%)</title><rect x="32.5354%" y="180" width="1.7646%" height="15" fill="rgb(209,38,44)"/><text x="32.7854%" y="190.50"></text></g><g><title>commit (sqlalchemy/orm/session.py:1042) (1,181 samples, 1.76%)</title><rect x="32.5354%" y="196" width="1.7646%" height="15" fill="rgb(236,212,23)"/><text x="32.7854%" y="206.50"></text></g><g><title>finish_user_spawn (jupyterhub/handlers/base.py:852) (9,340 samples, 13.96%)</title><rect x="20.3759%" y="164" width="13.9555%" height="15" fill="rgb(242,79,21)"/><text x="20.6259%" y="174.50">finish_user_spawn (ju..</text></g><g><title>_flush (sqlalchemy/orm/session.py:2624) (1,074 samples, 1.60%)</title><rect x="35.6463%" y="276" width="1.6047%" height="15" fill="rgb(211,96,35)"/><text x="35.8963%" y="286.50"></text></g><g><title>__iter__ (sqlalchemy/orm/query.py:3502) (1,292 samples, 1.93%)</title><rect x="35.4042%" y="228" width="1.9305%" height="15" fill="rgb(253,215,40)"/><text x="35.6542%" y="238.50">_..</text></g><g><title>_autoflush (sqlalchemy/orm/session.py:1617) (1,290 samples, 1.93%)</title><rect x="35.4072%" y="244" width="1.9275%" height="15" fill="rgb(211,81,21)"/><text x="35.6572%" y="254.50">_..</text></g><g><title>flush (sqlalchemy/orm/session.py:2523) (1,287 samples, 1.92%)</title><rect x="35.4117%" y="260" width="1.9230%" height="15" fill="rgb(208,190,38)"/><text x="35.6617%" y="270.50">f..</text></g><g><title>_execute_context (sqlalchemy/engine/base.py:1278) (1,070 samples, 1.60%)</title><rect x="38.0146%" y="308" width="1.5988%" height="15" fill="rgb(235,213,38)"/><text x="38.2646%" y="318.50"></text></g><g><title>do_execute (sqlalchemy/engine/default.py:593) (1,070 samples, 1.60%)</title><rect x="38.0146%" y="324" width="1.5988%" height="15" fill="rgb(237,122,38)"/><text x="38.2646%" y="334.50"></text></g><g><title>__iter__ (sqlalchemy/orm/query.py:3503) (1,527 samples, 2.28%)</title><rect x="37.3347%" y="228" width="2.2816%" height="15" fill="rgb(244,218,35)"/><text x="37.5847%" y="238.50">_..</text></g><g><title>_execute_and_instances (sqlalchemy/orm/query.py:3528) (1,511 samples, 2.26%)</title><rect x="37.3586%" y="244" width="2.2577%" height="15" fill="rgb(240,68,47)"/><text x="37.6086%" y="254.50">_..</text></g><g><title>execute (sqlalchemy/engine/base.py:1014) (1,505 samples, 2.25%)</title><rect x="37.3676%" y="260" width="2.2487%" height="15" fill="rgb(210,16,53)"/><text x="37.6176%" y="270.50">e..</text></g><g><title>_execute_on_connection (sqlalchemy/sql/elements.py:298) (1,504 samples, 2.25%)</title><rect x="37.3691%" y="276" width="2.2472%" height="15" fill="rgb(235,124,12)"/><text x="37.6191%" y="286.50">_..</text></g><g><title>_execute_clauseelement (sqlalchemy/engine/base.py:1133) (1,134 samples, 1.69%)</title><rect x="37.9219%" y="292" width="1.6944%" height="15" fill="rgb(224,169,11)"/><text x="38.1719%" y="302.50"></text></g><g><title>first (sqlalchemy/orm/query.py:3397) (3,055 samples, 4.56%)</title><rect x="35.0636%" y="196" width="4.5647%" height="15" fill="rgb(250,166,2)"/><text x="35.3136%" y="206.50">first..</text></g><g><title>__getitem__ (sqlalchemy/orm/query.py:3171) (3,047 samples, 4.55%)</title><rect x="35.0755%" y="212" width="4.5527%" height="15" fill="rgb(242,216,29)"/><text x="35.3255%" y="222.50">__get..</text></g><g><title>update_last_activity (jupyterhub/app.py:2500) (3,142 samples, 4.69%)</title><rect x="34.9694%" y="164" width="4.6947%" height="15" fill="rgb(230,116,27)"/><text x="35.2194%" y="174.50">updat..</text></g><g><title>find (jupyterhub/orm.py:222) (3,141 samples, 4.69%)</title><rect x="34.9709%" y="180" width="4.6932%" height="15" fill="rgb(228,99,48)"/><text x="35.2209%" y="190.50">find ..</text></g><g><title>_run (asyncio/events.py:145) (26,450 samples, 39.52%)</title><rect x="0.2226%" y="148" width="39.5207%" height="15" fill="rgb(253,11,6)"/><text x="0.4726%" y="158.50">_run (asyncio/events.py:145)</text></g><g><title>_run_once (asyncio/base_events.py:1451) (26,460 samples, 39.54%)</title><rect x="0.2122%" y="132" width="39.5356%" height="15" fill="rgb(247,143,39)"/><text x="0.4622%" y="142.50">_run_once (asyncio/base_events.py:1451)</text></g><g><title>&lt;module&gt; (jupyterhub:11) (26,598 samples, 39.74%)</title><rect x="0.0075%" y="68" width="39.7418%" height="15" fill="rgb(236,97,10)"/><text x="0.2575%" y="78.50">&lt;module&gt; (jupyterhub:11)</text></g><g><title>launch_instance (jupyterhub/app.py:2782) (26,598 samples, 39.74%)</title><rect x="0.0075%" y="84" width="39.7418%" height="15" fill="rgb(233,208,19)"/><text x="0.2575%" y="94.50">launch_instance (jupyterhub/app.py:2782)</text></g><g><title>start (tornado/platform/asyncio.py:149) (26,598 samples, 39.74%)</title><rect x="0.0075%" y="100" width="39.7418%" height="15" fill="rgb(216,164,2)"/><text x="0.2575%" y="110.50">start (tornado/platform/asyncio.py:149)</text></g><g><title>run_forever (asyncio/base_events.py:438) (26,598 samples, 39.74%)</title><rect x="0.0075%" y="116" width="39.7418%" height="15" fill="rgb(220,129,5)"/><text x="0.2575%" y="126.50">run_forever (asyncio/base_events.py:438)</text></g><g><title>deserialize (kubernetes/client/api_client.py:252) (3,311 samples, 4.95%)</title><rect x="41.2464%" y="212" width="4.9472%" height="15" fill="rgb(242,17,10)"/><text x="41.4964%" y="222.50">deseri..</text></g><g><title>loads (json/__init__.py:354) (3,311 samples, 4.95%)</title><rect x="41.2464%" y="228" width="4.9472%" height="15" fill="rgb(242,107,0)"/><text x="41.4964%" y="238.50">loads ..</text></g><g><title>decode (json/decoder.py:339) (3,311 samples, 4.95%)</title><rect x="41.2464%" y="244" width="4.9472%" height="15" fill="rgb(251,28,31)"/><text x="41.4964%" y="254.50">decode..</text></g><g><title>raw_decode (json/decoder.py:355) (3,311 samples, 4.95%)</title><rect x="41.2464%" y="260" width="4.9472%" height="15" fill="rgb(233,223,10)"/><text x="41.4964%" y="270.50">raw_de..</text></g><g><title>__deserialize_model (kubernetes/client/api_client.py:631) (721 samples, 1.08%)</title><rect x="53.0862%" y="468" width="1.0773%" height="15" fill="rgb(215,21,27)"/><text x="53.3362%" y="478.50"></text></g><g><title>__deserialize_model (kubernetes/client/api_client.py:636) (1,158 samples, 1.73%)</title><rect x="54.8359%" y="468" width="1.7302%" height="15" fill="rgb(232,23,21)"/><text x="55.0859%" y="478.50"></text></g><g><title>__deserialize (kubernetes/client/api_client.py:273) (3,833 samples, 5.73%)</title><rect x="51.6608%" y="420" width="5.7271%" height="15" fill="rgb(244,5,23)"/><text x="51.9108%" y="430.50">__deser..</text></g><g><title>&lt;listcomp&gt; (kubernetes/client/api_client.py:273) (3,705 samples, 5.54%)</title><rect x="51.8520%" y="436" width="5.5359%" height="15" fill="rgb(226,81,46)"/><text x="52.1020%" y="446.50">&lt;listco..</text></g><g><title>__deserialize (kubernetes/client/api_client.py:295) (3,003 samples, 4.49%)</title><rect x="52.9009%" y="452" width="4.4870%" height="15" fill="rgb(247,70,30)"/><text x="53.1509%" y="462.50">__des..</text></g><g><title>__next__ (dateutil/parser/_parser.py:196) (1,287 samples, 1.92%)</title><rect x="60.4091%" y="516" width="1.9230%" height="15" fill="rgb(212,68,19)"/><text x="60.6591%" y="526.50">_..</text></g><g><title>_parse (dateutil/parser/_parser.py:725) (1,924 samples, 2.87%)</title><rect x="59.6291%" y="484" width="2.8748%" height="15" fill="rgb(240,187,13)"/><text x="59.8791%" y="494.50">_p..</text></g><g><title>split (dateutil/parser/_parser.py:207) (1,900 samples, 2.84%)</title><rect x="59.6650%" y="500" width="2.8389%" height="15" fill="rgb(223,113,26)"/><text x="59.9150%" y="510.50">sp..</text></g><g><title>_parse (dateutil/parser/_parser.py:746) (1,270 samples, 1.90%)</title><rect x="63.0568%" y="484" width="1.8976%" height="15" fill="rgb(206,192,2)"/><text x="63.3068%" y="494.50">_..</text></g><g><title>parse (dateutil/parser/_parser.py:646) (4,660 samples, 6.96%)</title><rect x="59.1988%" y="468" width="6.9628%" height="15" fill="rgb(241,108,4)"/><text x="59.4488%" y="478.50">parse (da..</text></g><g><title>__deserialize (kubernetes/client/api_client.py:293) (6,338 samples, 9.47%)</title><rect x="58.2530%" y="420" width="9.4700%" height="15" fill="rgb(247,173,49)"/><text x="58.5030%" y="430.50">__deserialize ..</text></g><g><title>__deserialize_datatime (kubernetes/client/api_client.py:605) (6,209 samples, 9.28%)</title><rect x="58.4458%" y="436" width="9.2773%" height="15" fill="rgb(224,114,35)"/><text x="58.6958%" y="446.50">__deserialize..</text></g><g><title>parse (dateutil/parser/_parser.py:1374) (6,184 samples, 9.24%)</title><rect x="58.4831%" y="452" width="9.2399%" height="15" fill="rgb(245,159,27)"/><text x="58.7331%" y="462.50">parse (dateut..</text></g><g><title>__next__ (dateutil/parser/_parser.py:196) (905 samples, 1.35%)</title><rect x="72.3579%" y="580" width="1.3522%" height="15" fill="rgb(245,172,44)"/><text x="72.6079%" y="590.50"></text></g><g><title>_parse (dateutil/parser/_parser.py:725) (1,436 samples, 2.15%)</title><rect x="71.8156%" y="548" width="2.1456%" height="15" fill="rgb(236,23,11)"/><text x="72.0656%" y="558.50">_..</text></g><g><title>split (dateutil/parser/_parser.py:207) (1,423 samples, 2.13%)</title><rect x="71.8350%" y="564" width="2.1262%" height="15" fill="rgb(205,117,38)"/><text x="72.0850%" y="574.50">s..</text></g><g><title>_parse (dateutil/parser/_parser.py:746) (851 samples, 1.27%)</title><rect x="74.3452%" y="548" width="1.2715%" height="15" fill="rgb(237,72,25)"/><text x="74.5952%" y="558.50"></text></g><g><title>parse (dateutil/parser/_parser.py:646) (3,313 samples, 4.95%)</title><rect x="71.5511%" y="532" width="4.9502%" height="15" fill="rgb(244,70,9)"/><text x="71.8011%" y="542.50">parse ..</text></g><g><title>__deserialize (kubernetes/client/api_client.py:293) (4,602 samples, 6.88%)</title><rect x="70.7114%" y="484" width="6.8761%" height="15" fill="rgb(217,125,39)"/><text x="70.9614%" y="494.50">__deseria..</text></g><g><title>__deserialize_datatime (kubernetes/client/api_client.py:605) (4,450 samples, 6.65%)</title><rect x="70.9385%" y="500" width="6.6490%" height="15" fill="rgb(235,36,10)"/><text x="71.1885%" y="510.50">__deseria..</text></g><g><title>parse (dateutil/parser/_parser.py:1374) (4,431 samples, 6.62%)</title><rect x="70.9669%" y="516" width="6.6206%" height="15" fill="rgb(251,123,47)"/><text x="71.2169%" y="526.50">parse (da..</text></g><g><title>__deserialize_model (kubernetes/client/api_client.py:636) (5,671 samples, 8.47%)</title><rect x="69.5952%" y="468" width="8.4734%" height="15" fill="rgb(221,13,13)"/><text x="69.8452%" y="478.50">__deserializ..</text></g><g><title>__deserialize_model (kubernetes/client/api_client.py:636) (6,655 samples, 9.94%)</title><rect x="68.4343%" y="436" width="9.9437%" height="15" fill="rgb(238,131,9)"/><text x="68.6843%" y="446.50">__deserialize_..</text></g><g><title>__deserialize (kubernetes/client/api_client.py:295) (6,304 samples, 9.42%)</title><rect x="68.9587%" y="452" width="9.4192%" height="15" fill="rgb(211,50,8)"/><text x="69.2087%" y="462.50">__deserialize..</text></g><g><title>__deserialize_model (kubernetes/client/api_client.py:636) (18,906 samples, 28.25%)</title><rect x="50.6731%" y="404" width="28.2487%" height="15" fill="rgb(245,182,24)"/><text x="50.9231%" y="414.50">__deserialize_model (kubernetes/client/api_cl..</text></g><g><title>__deserialize (kubernetes/client/api_client.py:295) (7,495 samples, 11.20%)</title><rect x="67.7230%" y="420" width="11.1988%" height="15" fill="rgb(242,14,37)"/><text x="67.9730%" y="430.50">__deserialize (k..</text></g><g><title>__deserialize_model (kubernetes/client/api_client.py:638) (689 samples, 1.03%)</title><rect x="78.9218%" y="404" width="1.0295%" height="15" fill="rgb(246,228,12)"/><text x="79.1718%" y="414.50"></text></g><g><title>__deserialize (kubernetes/client/api_client.py:273) (21,385 samples, 31.95%)</title><rect x="48.1689%" y="356" width="31.9527%" height="15" fill="rgb(213,55,15)"/><text x="48.4189%" y="366.50">__deserialize (kubernetes/client/api_client.py:273)</text></g><g><title>&lt;listcomp&gt; (kubernetes/client/api_client.py:273) (21,292 samples, 31.81%)</title><rect x="48.3079%" y="372" width="31.8138%" height="15" fill="rgb(209,9,3)"/><text x="48.5579%" y="382.50">&lt;listcomp&gt; (kubernetes/client/api_client.py:273)</text></g><g><title>__deserialize (kubernetes/client/api_client.py:295) (20,942 samples, 31.29%)</title><rect x="48.8308%" y="388" width="31.2908%" height="15" fill="rgb(230,59,30)"/><text x="49.0808%" y="398.50">__deserialize (kubernetes/client/api_client.py:295)</text></g><g><title>_parse (dateutil/parser/_parser.py:725) (810 samples, 1.21%)</title><rect x="81.5665%" y="420" width="1.2103%" height="15" fill="rgb(209,121,21)"/><text x="81.8165%" y="430.50"></text></g><g><title>split (dateutil/parser/_parser.py:207) (807 samples, 1.21%)</title><rect x="81.5710%" y="436" width="1.2058%" height="15" fill="rgb(220,109,13)"/><text x="81.8210%" y="446.50"></text></g><g><title>parse (dateutil/parser/_parser.py:646) (2,036 samples, 3.04%)</title><rect x="81.4783%" y="404" width="3.0421%" height="15" fill="rgb(232,18,1)"/><text x="81.7283%" y="414.50">par..</text></g><g><title>__deserialize (kubernetes/client/api_client.py:293) (2,797 samples, 4.18%)</title><rect x="81.0704%" y="356" width="4.1792%" height="15" fill="rgb(215,41,42)"/><text x="81.3204%" y="366.50">__des..</text></g><g><title>__deserialize_datatime (kubernetes/client/api_client.py:605) (2,740 samples, 4.09%)</title><rect x="81.1556%" y="372" width="4.0940%" height="15" fill="rgb(224,123,36)"/><text x="81.4056%" y="382.50">__de..</text></g><g><title>parse (dateutil/parser/_parser.py:1374) (2,725 samples, 4.07%)</title><rect x="81.1780%" y="388" width="4.0716%" height="15" fill="rgb(240,125,3)"/><text x="81.4280%" y="398.50">pars..</text></g><g><title>__deserialize_model (kubernetes/client/api_client.py:631) (2,026 samples, 3.03%)</title><rect x="86.3911%" y="564" width="3.0272%" height="15" fill="rgb(205,98,50)"/><text x="86.6411%" y="574.50">__d..</text></g><g><title>__deserialize_model (kubernetes/client/api_client.py:636) (2,914 samples, 4.35%)</title><rect x="85.9937%" y="500" width="4.3540%" height="15" fill="rgb(205,185,37)"/><text x="86.2437%" y="510.50">__des..</text></g><g><title>__deserialize (kubernetes/client/api_client.py:273) (2,856 samples, 4.27%)</title><rect x="86.0804%" y="516" width="4.2673%" height="15" fill="rgb(238,207,15)"/><text x="86.3304%" y="526.50">__des..</text></g><g><title>&lt;listcomp&gt; (kubernetes/client/api_client.py:273) (2,801 samples, 4.19%)</title><rect x="86.1625%" y="532" width="4.1852%" height="15" fill="rgb(213,199,42)"/><text x="86.4125%" y="542.50">&lt;list..</text></g><g><title>__deserialize (kubernetes/client/api_client.py:295) (2,655 samples, 3.97%)</title><rect x="86.3807%" y="548" width="3.9670%" height="15" fill="rgb(235,201,11)"/><text x="86.6307%" y="558.50">__de..</text></g><g><title>__deserialize_model (kubernetes/client/api_client.py:636) (3,156 samples, 4.72%)</title><rect x="85.6904%" y="436" width="4.7156%" height="15" fill="rgb(207,46,11)"/><text x="85.9404%" y="446.50">__des..</text></g><g><title>__deserialize (kubernetes/client/api_client.py:273) (3,085 samples, 4.61%)</title><rect x="85.7965%" y="452" width="4.6095%" height="15" fill="rgb(241,35,35)"/><text x="86.0465%" y="462.50">__des..</text></g><g><title>&lt;listcomp&gt; (kubernetes/client/api_client.py:273) (3,068 samples, 4.58%)</title><rect x="85.8219%" y="468" width="4.5841%" height="15" fill="rgb(243,32,47)"/><text x="86.0719%" y="478.50">&lt;list..</text></g><g><title>__deserialize (kubernetes/client/api_client.py:295) (3,027 samples, 4.52%)</title><rect x="85.8831%" y="484" width="4.5228%" height="15" fill="rgb(247,202,23)"/><text x="86.1331%" y="494.50">__des..</text></g><g><title>__deserialize_model (kubernetes/client/api_client.py:636) (3,275 samples, 4.89%)</title><rect x="85.5529%" y="404" width="4.8934%" height="15" fill="rgb(219,102,11)"/><text x="85.8029%" y="414.50">__dese..</text></g><g><title>__deserialize (kubernetes/client/api_client.py:295) (3,251 samples, 4.86%)</title><rect x="85.5888%" y="420" width="4.8575%" height="15" fill="rgb(243,110,44)"/><text x="85.8388%" y="430.50">__dese..</text></g><g><title>__deserialize_model (kubernetes/client/api_client.py:636) (3,409 samples, 5.09%)</title><rect x="85.3915%" y="372" width="5.0936%" height="15" fill="rgb(222,74,54)"/><text x="85.6415%" y="382.50">__dese..</text></g><g><title>__deserialize (kubernetes/client/api_client.py:295) (3,372 samples, 5.04%)</title><rect x="85.4468%" y="388" width="5.0383%" height="15" fill="rgb(216,99,12)"/><text x="85.6968%" y="398.50">__dese..</text></g><g><title>__deserialize_model (kubernetes/client/api_client.py:636) (28,929 samples, 43.22%)</title><rect x="47.3979%" y="340" width="43.2247%" height="15" fill="rgb(226,22,26)"/><text x="47.6479%" y="350.50">__deserialize_model (kubernetes/client/api_client.py:636)</text></g><g><title>__deserialize (kubernetes/client/api_client.py:295) (3,596 samples, 5.37%)</title><rect x="85.2496%" y="356" width="5.3730%" height="15" fill="rgb(217,163,10)"/><text x="85.4996%" y="366.50">__deser..</text></g><g><title>__deserialize_model (kubernetes/client/api_client.py:636) (30,074 samples, 44.94%)</title><rect x="46.4058%" y="308" width="44.9355%" height="15" fill="rgb(213,25,53)"/><text x="46.6558%" y="318.50">__deserialize_model (kubernetes/client/api_client.py:636)</text></g><g><title>__deserialize (kubernetes/client/api_client.py:295) (29,990 samples, 44.81%)</title><rect x="46.5313%" y="324" width="44.8100%" height="15" fill="rgb(252,105,26)"/><text x="46.7813%" y="334.50">__deserialize (kubernetes/client/api_client.py:295)</text></g><g><title>__deserialize (kubernetes/client/api_client.py:273) (30,302 samples, 45.28%)</title><rect x="46.1936%" y="260" width="45.2762%" height="15" fill="rgb(220,39,43)"/><text x="46.4436%" y="270.50">__deserialize (kubernetes/client/api_client.py:273)</text></g><g><title>&lt;listcomp&gt; (kubernetes/client/api_client.py:273) (30,300 samples, 45.27%)</title><rect x="46.1966%" y="276" width="45.2732%" height="15" fill="rgb(229,68,48)"/><text x="46.4466%" y="286.50">&lt;listcomp&gt; (kubernetes/client/api_client.py:273)</text></g><g><title>__deserialize (kubernetes/client/api_client.py:295) (30,252 samples, 45.20%)</title><rect x="46.2683%" y="292" width="45.2015%" height="15" fill="rgb(252,8,32)"/><text x="46.5183%" y="302.50">__deserialize (kubernetes/client/api_client.py:295)</text></g><g><title>_list_and_update (kubespawner/reflector.py:157) (34,615 samples, 51.72%)</title><rect x="39.7508%" y="132" width="51.7205%" height="15" fill="rgb(223,20,43)"/><text x="40.0008%" y="142.50">_list_and_update (kubespawner/reflector.py:157)</text></g><g><title>list_namespaced_pod (kubernetes/client/api/core_v1_api.py:12803) (34,615 samples, 51.72%)</title><rect x="39.7508%" y="148" width="51.7205%" height="15" fill="rgb(229,81,49)"/><text x="40.0008%" y="158.50">list_namespaced_pod (kubernetes/client/api/core_v1_api.py:12803)</text></g><g><title>list_namespaced_pod_with_http_info (kubernetes/client/api/core_v1_api.py:12905) (34,614 samples, 51.72%)</title><rect x="39.7523%" y="164" width="51.7190%" height="15" fill="rgb(236,28,36)"/><text x="40.0023%" y="174.50">list_namespaced_pod_with_http_info (kubernetes/client/api/core_v1_api.py:12905)</text></g><g><title>call_api (kubernetes/client/api_client.py:345) (34,614 samples, 51.72%)</title><rect x="39.7523%" y="180" width="51.7190%" height="15" fill="rgb(249,185,26)"/><text x="40.0023%" y="190.50">call_api (kubernetes/client/api_client.py:345)</text></g><g><title>__call_api (kubernetes/client/api_client.py:184) (33,956 samples, 50.74%)</title><rect x="40.7354%" y="196" width="50.7359%" height="15" fill="rgb(249,174,33)"/><text x="40.9854%" y="206.50">__call_api (kubernetes/client/api_client.py:184)</text></g><g><title>deserialize (kubernetes/client/api_client.py:256) (30,303 samples, 45.28%)</title><rect x="46.1936%" y="212" width="45.2777%" height="15" fill="rgb(233,201,37)"/><text x="46.4436%" y="222.50">deserialize (kubernetes/client/api_client.py:256)</text></g><g><title>__deserialize (kubernetes/client/api_client.py:295) (30,303 samples, 45.28%)</title><rect x="46.1936%" y="228" width="45.2777%" height="15" fill="rgb(221,78,26)"/><text x="46.4436%" y="238.50">__deserialize (kubernetes/client/api_client.py:295)</text></g><g><title>__deserialize_model (kubernetes/client/api_client.py:636) (30,303 samples, 45.28%)</title><rect x="46.1936%" y="244" width="45.2777%" height="15" fill="rgb(250,127,30)"/><text x="46.4436%" y="254.50">__deserialize_model (kubernetes/client/api_client.py:636)</text></g><g><title>__eq__ (kubernetes/client/models/v1_pod_spec.py:945) (682 samples, 1.02%)</title><rect x="92.3618%" y="196" width="1.0190%" height="15" fill="rgb(230,49,44)"/><text x="92.6118%" y="206.50"></text></g><g><title>_watch_and_update (kubespawner/reflector.py:206) (36,260 samples, 54.18%)</title><rect x="39.7493%" y="116" width="54.1784%" height="15" fill="rgb(229,67,23)"/><text x="39.9993%" y="126.50">_watch_and_update (kubespawner/reflector.py:206)</text></g><g><title>_list_and_update (kubespawner/reflector.py:160) (1,644 samples, 2.46%)</title><rect x="91.4713%" y="132" width="2.4564%" height="15" fill="rgb(249,83,47)"/><text x="91.7213%" y="142.50">_l..</text></g><g><title>__set__ (traitlets/traitlets.py:585) (1,615 samples, 2.41%)</title><rect x="91.5146%" y="148" width="2.4131%" height="15" fill="rgb(215,43,3)"/><text x="91.7646%" y="158.50">__..</text></g><g><title>set (traitlets/traitlets.py:567) (1,159 samples, 1.73%)</title><rect x="92.1960%" y="164" width="1.7317%" height="15" fill="rgb(238,154,13)"/><text x="92.4460%" y="174.50"></text></g><g><title>__eq__ (kubernetes/client/models/v1_pod.py:216) (1,143 samples, 1.71%)</title><rect x="92.2199%" y="180" width="1.7078%" height="15" fill="rgb(219,56,2)"/><text x="92.4699%" y="190.50"></text></g><g><title>_update_chunk_length (urllib3/response.py:693) (1,172 samples, 1.75%)</title><rect x="94.0846%" y="180" width="1.7512%" height="15" fill="rgb(233,0,4)"/><text x="94.3346%" y="190.50"></text></g><g><title>readinto (socket.py:586) (1,153 samples, 1.72%)</title><rect x="94.1130%" y="196" width="1.7228%" height="15" fill="rgb(235,30,7)"/><text x="94.3630%" y="206.50"></text></g><g><title>recv_into (ssl.py:1012) (1,149 samples, 1.72%)</title><rect x="94.1190%" y="212" width="1.7168%" height="15" fill="rgb(250,79,13)"/><text x="94.3690%" y="222.50"></text></g><g><title>read (ssl.py:874) (1,147 samples, 1.71%)</title><rect x="94.1220%" y="228" width="1.7138%" height="15" fill="rgb(211,146,34)"/><text x="94.3720%" y="238.50"></text></g><g><title>read (ssl.py:631) (1,145 samples, 1.71%)</title><rect x="94.1249%" y="244" width="1.7108%" height="15" fill="rgb(228,22,38)"/><text x="94.3749%" y="254.50"></text></g><g><title>read_chunked (urllib3/response.py:763) (1,179 samples, 1.76%)</title><rect x="94.0801%" y="164" width="1.7616%" height="15" fill="rgb(235,168,5)"/><text x="94.3301%" y="174.50"></text></g><g><title>iter_resp_lines (kubernetes/watch/watch.py:46) (1,318 samples, 1.97%)</title><rect x="94.0756%" y="148" width="1.9693%" height="15" fill="rgb(221,155,16)"/><text x="94.3256%" y="158.50">i..</text></g><g><title>stream (kubernetes/watch/watch.py:144) (1,322 samples, 1.98%)</title><rect x="94.0741%" y="132" width="1.9753%" height="15" fill="rgb(215,215,53)"/><text x="94.3241%" y="142.50">s..</text></g><g><title>__deserialize_model (kubernetes/client/api_client.py:636) (1,144 samples, 1.71%)</title><rect x="96.6994%" y="292" width="1.7093%" height="15" fill="rgb(223,4,10)"/><text x="96.9494%" y="302.50"></text></g><g><title>__deserialize (kubernetes/client/api_client.py:273) (1,327 samples, 1.98%)</title><rect x="96.5545%" y="244" width="1.9828%" height="15" fill="rgb(234,103,6)"/><text x="96.8045%" y="254.50">_..</text></g><g><title>&lt;listcomp&gt; (kubernetes/client/api_client.py:273) (1,318 samples, 1.97%)</title><rect x="96.5679%" y="260" width="1.9693%" height="15" fill="rgb(227,97,0)"/><text x="96.8179%" y="270.50">&lt;..</text></g><g><title>__deserialize (kubernetes/client/api_client.py:295) (1,301 samples, 1.94%)</title><rect x="96.5933%" y="276" width="1.9439%" height="15" fill="rgb(234,150,53)"/><text x="96.8433%" y="286.50">_..</text></g><g><title>__deserialize_model (kubernetes/client/api_client.py:636) (1,734 samples, 2.59%)</title><rect x="96.4947%" y="228" width="2.5909%" height="15" fill="rgb(228,201,54)"/><text x="96.7447%" y="238.50">__..</text></g><g><title>__deserialize_model (kubernetes/client/api_client.py:636) (1,881 samples, 2.81%)</title><rect x="96.4035%" y="196" width="2.8105%" height="15" fill="rgb(222,22,37)"/><text x="96.6535%" y="206.50">__..</text></g><g><title>__deserialize (kubernetes/client/api_client.py:295) (1,870 samples, 2.79%)</title><rect x="96.4200%" y="212" width="2.7941%" height="15" fill="rgb(237,53,32)"/><text x="96.6700%" y="222.50">__..</text></g><g><title>unmarshal_event (kubernetes/watch/watch.py:96) (1,998 samples, 2.99%)</title><rect x="96.2482%" y="148" width="2.9853%" height="15" fill="rgb(233,25,53)"/><text x="96.4982%" y="158.50">unm..</text></g><g><title>deserialize (kubernetes/client/api_client.py:256) (1,906 samples, 2.85%)</title><rect x="96.3856%" y="164" width="2.8479%" height="15" fill="rgb(210,40,34)"/><text x="96.6356%" y="174.50">de..</text></g><g><title>__deserialize (kubernetes/client/api_client.py:295) (1,901 samples, 2.84%)</title><rect x="96.3931%" y="180" width="2.8404%" height="15" fill="rgb(241,220,44)"/><text x="96.6431%" y="190.50">__..</text></g><g><title>stream (kubernetes/watch/watch.py:145) (2,138 samples, 3.19%)</title><rect x="96.0494%" y="132" width="3.1945%" height="15" fill="rgb(235,28,35)"/><text x="96.2994%" y="142.50">str..</text></g><g><title>_watch_and_update (kubespawner/reflector.py:226) (3,558 samples, 5.32%)</title><rect x="93.9292%" y="116" width="5.3162%" height="15" fill="rgb(210,56,17)"/><text x="94.1792%" y="126.50">_watch_..</text></g><g><title>_bootstrap (threading.py:884) (40,323 samples, 60.25%)</title><rect x="39.7493%" y="68" width="60.2492%" height="15" fill="rgb(224,130,29)"/><text x="39.9993%" y="78.50">_bootstrap (threading.py:884)</text></g><g><title>_bootstrap_inner (threading.py:916) (40,323 samples, 60.25%)</title><rect x="39.7493%" y="84" width="60.2492%" height="15" fill="rgb(235,212,8)"/><text x="39.9993%" y="94.50">_bootstrap_inner (threading.py:916)</text></g><g><title>run (threading.py:864) (40,323 samples, 60.25%)</title><rect x="39.7493%" y="100" width="60.2492%" height="15" fill="rgb(223,33,50)"/><text x="39.9993%" y="110.50">run (threading.py:864)</text></g><g><title>all (66,927 samples, 100%)</title><rect x="0.0000%" y="36" width="100.0000%" height="15" fill="rgb(219,149,13)"/><text x="0.2500%" y="46.50"></text></g><g><title>process 1:&quot;/usr/bin/python3 /usr/local/bin/jupyterhub --config /etc/jupyterhub/jupyterhub_config.py --upgrade-db&quot; (66,927 samples, 100.00%)</title><rect x="0.0000%" y="52" width="100.0000%" height="15" fill="rgb(250,156,29)"/><text x="0.2500%" y="62.50">process 1:&quot;/usr/bin/python3 /usr/local/bin/jupyterhub --config /etc/jupyterhub/jupyterhub_config.py --upgrade-db&quot;</text></g></svg></svg>

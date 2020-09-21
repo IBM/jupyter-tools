@@ -14,3 +14,7 @@ In order to support high load events we have tooling to run stress tests on our 
 ## Configuration tuning
 There are various configuration settings you can modify to improve both steady-state and scale-up
 performance. See [Configuration settings](docs/configuration.md) for more details.
+
+## Profiling
+Performance data can be collected during normal operations or a stress-test run. See
+[Profiling](docs/profiling.md) for more details.
