@@ -106,7 +106,7 @@ singleuser:
 ## Startup time
 
 <a name="spawners-timeout"></a>
-### `init_spanwners_timeout`
+### `init_spawners_timeout`
 [c.JupyterHub.init_spawners_timeout](https://jupyterhub.readthedocs.io/en/stable/api/app.html#jupyterhub.app.JupyterHub.init_spawners_timeout) controls how long the hub will wait for spawners to
 initialize. When this timeout is reached the spawner check will go into the background and
 hub startup will continue. With many hundreds or thousands of spawners this is always going
