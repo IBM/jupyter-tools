@@ -437,7 +437,8 @@ def start_servers(users, endpoint, session, profile=None):
                 thread_name_prefix=thread_name_prefix) as executor:
             for username in usernames:
                 executor.submit(
-                    start_server, username, endpoint, session, profile
+                    start_server, username, endpoint, session,
+                    profile=profile
                 )
 
 
@@ -527,7 +528,7 @@ def run_stress_test(count, batch_size, token, endpoint, dry_run=False,
     users = create_users(count, batch_size, endpoint, session,
                          existing_users=existing_users)
     # Now that we've created the users, start a server for each in batches.
-    start_servers(users, endpoint, session, profile)
+    start_servers(users, endpoint, session, profile=profile)
     # Now that all servers are starting we need to poll until they are ready.
     # Note that because of the concurrent_spawn_limit in the hub we could be
     # waiting awhile. We could also be waiting in case the auto-scaler needs to
