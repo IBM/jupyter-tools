@@ -123,6 +123,10 @@ without actually making any changes, for example:
              'Note that by default z2jh will limit concurrent server creation '
              'to 64 (see c.JupyterHub.concurrent_spawn_limit) (default: 10). '
     )
+    stress_parser.add_argument(
+        '-p', '--profile', type=str, required=False,
+        help='Hardware profile for servers.'
+    )
 
     activity_parser = subparsers.add_parser(
         'activity-stress-test', parents=[parent_parser]
@@ -405,9 +409,11 @@ def create_users(count, batch_size, endpoint, session, existing_users=[]):
     return users
 
 
-def start_server(username, endpoint, session):
+def start_server(username, endpoint, session, profile=None):
+    if profile:
+        profile = {"profile": profile}
     resp = session.post(endpoint + '/users/%s/server' % username,
-                        timeout=DEFAULT_TIMEOUT)
+                        timeout=DEFAULT_TIMEOUT, json=profile)
     if resp:
         LOG.debug('Server for user %s is starting', username)
     else:
@@ -418,7 +424,7 @@ def start_server(username, endpoint, session):
 
 
 @timeit
-def start_servers(users, endpoint, session):
+def start_servers(users, endpoint, session, profile=None):
     LOG.info('Starting notebook servers')
     for index, usernames in enumerate(users):
         # Start the servers in batches using a ThreadPoolExecutor because
@@ -430,7 +436,9 @@ def start_servers(users, endpoint, session):
                 max_workers=len(usernames),
                 thread_name_prefix=thread_name_prefix) as executor:
             for username in usernames:
-                executor.submit(start_server, username, endpoint, session)
+                executor.submit(
+                    start_server, username, endpoint, session, profile
+                )
 
 
 @timeit
@@ -508,7 +516,7 @@ def find_existing_stress_test_users(endpoint, session):
 
 @timeit
 def run_stress_test(count, batch_size, token, endpoint, dry_run=False,
-                    keep=False):
+                    keep=False, profile=None):
     session = get_session(token, dry_run=dry_run)
     if batch_size > count:
         batch_size = count
@@ -519,7 +527,7 @@ def run_stress_test(count, batch_size, token, endpoint, dry_run=False,
     users = create_users(count, batch_size, endpoint, session,
                          existing_users=existing_users)
     # Now that we've created the users, start a server for each in batches.
-    start_servers(users, endpoint, session)
+    start_servers(users, endpoint, session, profile)
     # Now that all servers are starting we need to poll until they are ready.
     # Note that because of the concurrent_spawn_limit in the hub we could be
     # waiting awhile. We could also be waiting in case the auto-scaler needs to
@@ -655,7 +663,7 @@ def main():
         elif args.command == 'stress-test':
             run_stress_test(args.count, args.batch_size, args.token,
                             args.endpoint, dry_run=args.dry_run,
-                            keep=args.keep)
+                            keep=args.keep, profile=args.profile)
         elif args.command == 'activity-stress-test':
             notebook_activity_test(args.count, args.token,
                                    args.endpoint, args.workers, keep=args.keep,
