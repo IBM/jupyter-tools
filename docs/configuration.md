@@ -16,6 +16,7 @@ This document provides an overview of configuration settings for increasing hub 
 4. [Other settings](#other)
    1. [`k8s_threadpool_api_workers`](#kubespawner-thread)
    2. [Disable events](#kubespawner-events)
+   3. [Disable consecutiveFailureLimit](#disable-consecutivefailurelimit)
 5. [References](#references)
 
 
@@ -153,6 +154,22 @@ sets `c.KubeSpawner.events_enabled`.
 ```yaml
 singleuser:
   events: false
+```
+
+<a name="disable-consecutivefailurelimit"></a>
+### Disable consecutiveFailureLimit
+JupyterHub itself defaults [c.Spawner.consecutive_failure_limit](https://jupyterhub.readthedocs.io/en/stable/api/spawner.html#jupyterhub.spawner.Spawner.consecutive_failure_limit) to 0 to disable it but zero-to-jupyterhub-k8s
+defaults it to [5](https://github.com/jupyterhub/zero-to-jupyterhub-k8s/blob/0.11.0/jupyterhub/values.yaml#L43).
+This can be problematic when a large user event starts and many users are starting server pods at the same time
+if the user node capacity is exhausted and, for example, spawns timeout due to waiting on the node auto-scaler adding
+more user node capacity. When the consecutive failure limit is reached the hub will restart which probably will not
+help with this type of failure scenario when pod spawn timeouts are occurring because of capacity issues.
+
+To disable the consecutive failure limit update the `consecutiveFailureLimit` key in the `values.yaml` file.
+
+```yaml
+hub:
+  consecutiveFailureLimit: 0
 ```
 
 <a name="references"></a>
