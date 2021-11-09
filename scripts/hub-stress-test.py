@@ -67,7 +67,7 @@ without actually making any changes, for example:
 
   JUPYTERHUB_API_TOKEN=test
   JUPYTERHUB_ENDPOINT=http://localhost:8000/hub/api
-  python hub-stress-test.py stress-test -v --dry-run
+  python hub-stress-test.py -v --dry-run stress-test
 ''')
     parser.add_argument('-e', '--endpoint',
                         default=os.environ.get('JUPYTERHUB_ENDPOINT'),
