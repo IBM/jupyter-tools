@@ -182,7 +182,7 @@ we can hit this timeout and the hub will delete the server pod but if we had jus
 would have been enough. So if you have node capacity so that pods are being created, but maybe they are just
 slow to come up and are hitting this timeout, you might want to increase it to something like 60 seconds. This
 also seems to vary depending on whether you are using `notebook` or `jupyterlab` / `jupyter-server`, the type of
-backing storage for the user pods (PVCs or shared [object] storage file system), and how many and what kinds of
+backing storage for the user pods (i.e. s3fs shared object storage is known to be slow(er)), and how many and what kinds of
 extensions you have in the user image.
 
 <a name="references"></a>
