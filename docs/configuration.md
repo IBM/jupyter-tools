@@ -17,6 +17,7 @@ This document provides an overview of configuration settings for increasing hub 
    1. [`k8s_threadpool_api_workers`](#kubespawner-thread)
    2. [Disable events](#kubespawner-events)
    3. [Disable consecutiveFailureLimit](#disable-consecutivefailurelimit)
+   4. [Increase http_timeout](#increase-http-timeout)
 5. [References](#references)
 
 
@@ -171,6 +172,18 @@ To disable the consecutive failure limit update the `consecutiveFailureLimit` ke
 hub:
   consecutiveFailureLimit: 0
 ```
+
+<a name="increase-http-timeout"></a>
+### Increase http_timeout
+
+[`c.KubeSpawner.http_timeout`](https://jupyterhub.readthedocs.io/en/stable/api/spawner.html#jupyterhub.spawner.Spawner.http_timeout)
+defaults to 30 seconds. During scale and load testing we have seen that sometimes
+we can hit this timeout and the hub will delete the server pod but if we had just waited a few seconds more it
+would have been enough. So if you have node capacity so that pods are being created, but maybe they are just
+slow to come up and are hitting this timeout, you might want to increase it to something like 60 seconds. This
+also seems to vary depending on whether you are using `notebook` or `jupyterlab` / `jupyter-server`, the type of
+backing storage for the user pods (i.e. s3fs shared object storage is known to be slow(er)), and how many and what kinds of
+extensions you have in the user image.
 
 <a name="references"></a>
 ## References
