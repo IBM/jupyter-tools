@@ -497,22 +497,35 @@ def find_existing_stress_test_users(endpoint, session):
     :returns: list of existing hub-stress-test users
     """
     # This could be a lot of users so make the timeout conservative.
-    resp = session.get(endpoint + '/users', timeout=120)
-    if resp:
-        users = resp.json()
-        LOG.debug('Found %d existing users in the hub', len(users))
-        if users:
-            users = list(
-                filter(lambda user: user['name'].startswith(USERNAME_PREFIX),
-                       users))
-            LOG.debug('Found %d existing hub-stress-test users', len(users))
-        return users
-    else:
-        # If the token is bad then we want to bail.
-        if resp.status_code == 403:
-            raise Exception('Invalid token')
-        LOG.warning('Failed to list existing users: %s', resp.content)
-        return []
+    headers = {
+        "Accept": "application/jupyterhub-pagination+json"
+    }
+    all_users = []
+    url = f"{endpoint}/users"
+
+    while url:
+        resp = session.get(url, headers=headers)
+        if resp:
+            pagination = resp.json()["_pagination"]
+            users = resp.json().get("items", [])
+            all_users.extend(
+                [u for u in users if u["name"].startswith(USERNAME_PREFIX)]
+            )
+
+            if not pagination["next"]:
+                LOG.debug(
+                    'Found %d existing hub-stress-test users',
+                    len(all_users)
+                )
+                return all_users
+            else:
+                url = pagination["next"]["url"]
+        else:
+            # If the token is bad then we want to bail.
+            if resp.status_code == 403:
+                raise Exception('Invalid token')
+            LOG.warning('Failed to list all existing users: %s', resp.content)
+            return all_users
 
 
 @timeit
