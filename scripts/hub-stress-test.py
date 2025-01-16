@@ -226,7 +226,7 @@ def get_session(token, dry_run=False, pool_maxsize=100):
     # Retry on errors that might be caused by stress testing.
     r = retry.Retry(
         backoff_factor=0.5,
-        method_whitelist=False,  # retry on any verb (including POST)
+        allowed_methods=None,  # retry on any verb (including POST)
         status_forcelist={
             429,  # concurrent_spawn_limit returns a 429
             503,  # if the hub container crashes we get a 503
